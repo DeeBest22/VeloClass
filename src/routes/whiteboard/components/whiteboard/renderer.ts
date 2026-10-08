@@ -292,27 +292,43 @@ function renderElement(
   ctx.restore();
 }
 
-function drawDotGrid(
+function drawGrid(
   ctx: CanvasRenderingContext2D,
   vp: Viewport,
   width: number,
   height: number,
 ) {
-  const gap = 20 * vp.zoom;
-  if (gap < 6) return;
+  // Clean square grid: one-device-pixel hairlines, very faint, even 50px cells.
+  let gap = 50 * vp.zoom;
+  // When zoomed far out, merge cells so the grid never turns into noise.
+  while (gap < 25) gap *= 2;
   const offsetX = vp.x % gap;
   const offsetY = vp.y % gap;
   const cssVal = getComputedStyle(document.documentElement)
     .getPropertyValue("--canvas-dot").trim();
-  ctx.fillStyle = `hsl(${cssVal || "220 10% 82%"})`;
-  const dotSize = Math.max(1, vp.zoom * 1.2);
+
+  // Snap in DEVICE pixels (not CSS pixels) so a line is always exactly one
+  // physical pixel wide, even at fractional scales like 125% / 150%.
+  const dpr = window.devicePixelRatio || 1;
+  const snap = (v: number) => (Math.round(v * dpr) + 0.5) / dpr;
+
+  ctx.save();
+  ctx.strokeStyle = `hsl(${cssVal || "220 10% 82%"})`;
+  ctx.globalAlpha = 0.25; // matches reference: darkest grid pixel ~rgb(245,246,247)
+  ctx.lineWidth = 1 / dpr;
+  ctx.beginPath();
   for (let x = offsetX; x < width; x += gap) {
-    for (let y = offsetY; y < height; y += gap) {
-      ctx.beginPath();
-      ctx.arc(x, y, dotSize, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    const px = snap(x);
+    ctx.moveTo(px, 0);
+    ctx.lineTo(px, height);
   }
+  for (let y = offsetY; y < height; y += gap) {
+    const py = snap(y);
+    ctx.moveTo(0, py);
+    ctx.lineTo(width, py);
+  }
+  ctx.stroke();
+  ctx.restore();
 }
 
 function rotatePoint(px: number, py: number, cx: number, cy: number, angle: number) {
@@ -475,7 +491,7 @@ export function render(
   ctx.fillStyle = `hsl(${bgColor || "0 0% 100%"})`;
   ctx.fillRect(0, 0, w, h);
 
-  drawDotGrid(ctx, vp, w, h);
+  drawGrid(ctx, vp, w, h);
 
   ctx.save();
   ctx.translate(vp.x, vp.y);
