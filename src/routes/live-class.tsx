@@ -420,11 +420,29 @@ function LiveClassPage() {
   const navigate = useNavigate();
 
   const [view, setView] = useState<"class" | "board">("class");
+  // The section on screen lags behind `view` just long enough to play a smooth exit first.
+  const [shownView, setShownView] = useState<"class" | "board">("class");
+  const [viewPhase, setViewPhase] = useState<"idle" | "out" | "in">("idle");
+  const viewDir = useRef(1);
+  useEffect(() => {
+    if (view === shownView) {
+      setViewPhase((p) => (p === "out" ? "in" : p));
+      return;
+    }
+    viewDir.current = view === "board" ? 1 : -1;
+    setViewPhase("out");
+    const t = setTimeout(() => {
+      setShownView(view);
+      setViewPhase("in");
+    }, 170);
+    return () => clearTimeout(t);
+  }, [view, shownView]);
   const [sheet, setSheet] = useState<Tab | null>(null);
   const [micOn, setMicOn] = useState(isInstructor);
   const [handUp, setHandUp] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [toolsView, setToolsView] = useState<"menu" | "pace">("menu");
+  const toolsNav = useRef(false);
   const [pace, setPace] = useState({ fast: 3, got: 14, lost: 2 });
   const [myPace, setMyPace] = useState<"fast" | "got" | "lost" | null>(null);
   const votePace = (k: "fast" | "got" | "lost") => {
@@ -615,7 +633,10 @@ function LiveClassPage() {
         @keyframes lc-tab-r { from { opacity: 0; transform: translateX(28px) } to { opacity: 1; transform: none } }
         @keyframes lc-tab-l { from { opacity: 0; transform: translateX(-28px) } to { opacity: 1; transform: none } }
         @keyframes lc-pulse { 50% { opacity: .3 } }
-        @media (prefers-reduced-motion: reduce) { .lc-anim, .lc-tab { animation: none !important } }
+        @keyframes lc-view-in { from { opacity: 0; transform: translate3d(var(--lc-dx), 0, 0) } to { opacity: 1; transform: none } }
+        @keyframes lc-view-out { from { opacity: 1; transform: none } to { opacity: 0; transform: translate3d(calc(var(--lc-dx) * -0.6), 0, 0) } }
+        @keyframes lc-menu-in { from { opacity: 0; transform: translate3d(var(--lc-dx), 0, 0) } to { opacity: 1; transform: none } }
+        @media (prefers-reduced-motion: reduce) { .lc-anim, .lc-tab, .lc-view, .lc-menu { animation: none !important } }
       `}</style>
 
       {/* Top bar */}
@@ -644,7 +665,10 @@ function LiveClassPage() {
         <div className="relative shrink-0">
           <button
             onClick={() => {
-              if (!toolsOpen) setToolsView("menu");
+              if (!toolsOpen) {
+                toolsNav.current = false;
+                setToolsView("menu");
+              }
               setToolsOpen((v) => !v);
             }}
             aria-expanded={toolsOpen}
@@ -660,9 +684,14 @@ function LiveClassPage() {
             style={{ border: `1px solid ${LINE}`, boxShadow: "0 18px 44px rgba(20,22,31,0.18)", opacity: toolsOpen ? 1 : 0, transform: toolsOpen ? "scale(1)" : "scale(0.92) translateY(-6px)", pointerEvents: toolsOpen ? "auto" : "none" }}
             aria-hidden={!toolsOpen}
           >
+            <div
+              key={toolsView}
+              className="lc-menu"
+              style={toolsNav.current ? ({ "--lc-dx": toolsView === "pace" ? "14px" : "-14px", animation: "lc-menu-in .26s cubic-bezier(.2,.8,.2,1) both" } as React.CSSProperties) : undefined}
+            >
             {toolsView === "pace" ? (
               <>
-                <button onClick={() => setToolsView("menu")} className="mb-2 flex items-center gap-1 px-1 text-[11px] font-bold uppercase tracking-wider" style={{ color: INK_SOFT }}>
+                <button onClick={() => { toolsNav.current = true; setToolsView("menu"); }} className="mb-2 flex items-center gap-1 px-1 text-[11px] font-bold uppercase tracking-wider" style={{ color: INK_SOFT }}>
                   <ChevronLeft className="h-3.5 w-3.5" /> Pace check
                 </button>
                 {(() => {
@@ -689,7 +718,7 @@ function LiveClassPage() {
                 { Icon: Presentation, label: view === "board" ? "Back to class" : "Whiteboard", run: () => setView(view === "board" ? "class" : "board") },
                 { Icon: Files, label: "Files", run: () => openSheet("files") },
                 { Icon: Megaphone, label: "Announce", run: () => openSheet("announcements") },
-                { Icon: Gauge, label: "Pace check", keep: true, run: () => setToolsView("pace") },
+                { Icon: Gauge, label: "Pace check", keep: true, run: () => { toolsNav.current = true; setToolsView("pace"); } },
               ].map(({ Icon, label, run, keep }: { Icon: typeof Gauge; label: string; run: () => void; keep?: boolean }) => (
                 <button
                   key={label}
@@ -709,87 +738,113 @@ function LiveClassPage() {
             </div>
               </>
             )}
+            </div>
           </div>
         </div>
       </header>
 
       {/* Main area: class stage or the shared local whiteboard experience */}
-      {view === "board" ? (
-        <main
-          className="relative mx-4 mb-3 mt-1 min-h-0 flex-1 overflow-hidden rounded-[28px]"
-          style={{ border: `1px solid ${LINE}`, boxShadow: SHADOW }}
-          aria-label="Live class whiteboard"
-        >
-          <Whiteboard embedded />
-        </main>
-      ) : (
-        <>
-          <main className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden overscroll-none px-6">
-            <div className="relative mb-5 grid h-[150px] w-[150px] place-items-center">
-              {main &&
-                [0, 0.7, 1.4].map((d) => (
-                  <span key={d} className="lc-anim absolute inset-0 rounded-full" style={{ border: `2px solid ${ACCENT}`, opacity: 0, animation: `lc-ring 2.2s ${d}s infinite` }} />
-                ))}
-              {main ? (
-                <Avatar p={main} size={104} />
-              ) : (
-                <div className="grid h-[104px] w-[104px] place-items-center rounded-full" style={{ backgroundColor: ACCENT_SOFT, color: ACCENT }}>
-                  <MicOff className="h-8 w-8" />
-                </div>
-              )}
+      <div
+        key={shownView}
+        className="lc-view flex min-h-0 flex-1 flex-col"
+        style={
+          viewPhase === "idle"
+            ? undefined
+            : ({
+                "--lc-dx": `${viewDir.current * 26}px`,
+                animation: viewPhase === "out" ? "lc-view-out .17s cubic-bezier(.4,0,1,1) both" : "lc-view-in .38s cubic-bezier(.2,.8,.2,1) both",
+                pointerEvents: viewPhase === "out" ? "none" : undefined,
+              } as React.CSSProperties)
+        }
+      >
+        {shownView === "board" ? (
+          <main
+            className="relative mx-4 mb-3 mt-1 min-h-0 flex-1 overflow-hidden rounded-[28px] bg-white"
+            style={{
+              border: "1px solid rgba(20,22,31,0.10)",
+              boxShadow: "0 1px 2px rgba(20,22,31,0.04), 0 10px 24px -14px rgba(20,22,31,0.22)",
+            }}
+            aria-label="Live class whiteboard"
+          >
+            {/* Board sits inside a slim white mat with a hairline edge */}
+            <div className="absolute inset-[5px] overflow-hidden rounded-[22px]">
+              <Whiteboard embedded />
             </div>
-            <p className="text-[21px] font-extrabold leading-tight">{mainName}</p>
-            <p className="mt-1.5 flex items-center gap-2 text-[13px]" style={{ color: INK_SOFT }}>
-              {main && (
-                <span className="inline-flex h-3.5 items-end gap-[2px]" aria-hidden>
-                  {[0, 0.15, 0.3, 0.45].map((d) => (
-                    <i key={d} className="lc-anim w-[3px] rounded-full" style={{ backgroundColor: ACCENT, height: 3, animation: `lc-bar .9s ${d}s infinite ease-in-out` }} />
-                  ))}
-                </span>
-              )}
-              {mainLabel}
-            </p>
+            <span
+              className="pointer-events-none absolute inset-[5px] z-[1] rounded-[22px]"
+              style={{ boxShadow: "inset 0 0 0 1px rgba(20,22,31,0.08)" }}
+              aria-hidden="true"
+            />
           </main>
-
-          <section className="px-4 pb-3">
-            <div className="mb-2.5 flex items-baseline justify-between px-1">
-              <h2 className="text-[13px] font-semibold">In class</h2>
-              <span className="text-[11.5px] font-medium" style={{ color: INK_SOFT }}>
-                {speaking.length} {speaking.length === 1 ? "mic" : "mics"} on
-              </span>
-            </div>
-            <div className="-mx-4 flex gap-3.5 overflow-x-auto px-5 pb-2 pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {PEOPLE.map((p) => {
-                const talking = speaking.includes(p.id);
-                return (
-                  <div key={p.id} className="flex w-[54px] shrink-0 flex-col items-center gap-1.5">
-                    <div className="relative">
-                      <Avatar p={p} size={50} ring={talking} />
-                      <span
-                        className="absolute -bottom-0.5 -right-1 grid h-[18px] w-[18px] place-items-center rounded-full bg-white"
-                        style={{ color: talking ? GREEN : INK_SOFT, border: `1px solid ${LINE}` }}
-                      >
-                        {talking ? <Mic className="h-2.5 w-2.5" strokeWidth={2.6} /> : <MicOff className="h-2.5 w-2.5" strokeWidth={2.6} />}
-                      </span>
-                    </div>
-                    <span className="w-full truncate text-center text-[11px] font-medium" style={{ color: talking ? INK : INK_SOFT }}>
-                      {p.name}
-                    </span>
+        ) : (
+          <>
+            <main className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden overscroll-none px-6">
+              <div className="relative mb-5 grid h-[150px] w-[150px] place-items-center">
+                {main &&
+                  [0, 0.7, 1.4].map((d) => (
+                    <span key={d} className="lc-anim absolute inset-0 rounded-full" style={{ border: `2px solid ${ACCENT}`, opacity: 0, animation: `lc-ring 2.2s ${d}s infinite` }} />
+                  ))}
+                {main ? (
+                  <Avatar p={main} size={104} />
+                ) : (
+                  <div className="grid h-[104px] w-[104px] place-items-center rounded-full" style={{ backgroundColor: ACCENT_SOFT, color: ACCENT }}>
+                    <MicOff className="h-8 w-8" />
                   </div>
-                );
-              })}
-              <div className="flex w-[54px] shrink-0 flex-col items-center gap-1.5">
-                <span className="grid h-[50px] w-[50px] place-items-center rounded-full text-[13px] font-bold" style={{ backgroundColor: CHIP, color: INK_SOFT }}>
-                  +{24 - PEOPLE.length}
-                </span>
-                <span className="text-[11px] font-medium" style={{ color: INK_SOFT }}>
-                  More
+                )}
+              </div>
+              <p className="text-[21px] font-extrabold leading-tight">{mainName}</p>
+              <p className="mt-1.5 flex items-center gap-2 text-[13px]" style={{ color: INK_SOFT }}>
+                {main && (
+                  <span className="inline-flex h-3.5 items-end gap-[2px]" aria-hidden>
+                    {[0, 0.15, 0.3, 0.45].map((d) => (
+                      <i key={d} className="lc-anim w-[3px] rounded-full" style={{ backgroundColor: ACCENT, height: 3, animation: `lc-bar .9s ${d}s infinite ease-in-out` }} />
+                    ))}
+                  </span>
+                )}
+                {mainLabel}
+              </p>
+            </main>
+
+            <section className="px-4 pb-3">
+              <div className="mb-2.5 flex items-baseline justify-between px-1">
+                <h2 className="text-[13px] font-semibold">In class</h2>
+                <span className="text-[11.5px] font-medium" style={{ color: INK_SOFT }}>
+                  {speaking.length} {speaking.length === 1 ? "mic" : "mics"} on
                 </span>
               </div>
-            </div>
-          </section>
-        </>
-      )}
+              <div className="-mx-4 flex gap-3.5 overflow-x-auto px-5 pb-2 pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {PEOPLE.map((p) => {
+                  const talking = speaking.includes(p.id);
+                  return (
+                    <div key={p.id} className="flex w-[54px] shrink-0 flex-col items-center gap-1.5">
+                      <div className="relative">
+                        <Avatar p={p} size={50} ring={talking} />
+                        <span
+                          className="absolute -bottom-0.5 -right-1 grid h-[18px] w-[18px] place-items-center rounded-full bg-white"
+                          style={{ color: talking ? GREEN : INK_SOFT, border: `1px solid ${LINE}` }}
+                        >
+                          {talking ? <Mic className="h-2.5 w-2.5" strokeWidth={2.6} /> : <MicOff className="h-2.5 w-2.5" strokeWidth={2.6} />}
+                        </span>
+                      </div>
+                      <span className="w-full truncate text-center text-[11px] font-medium" style={{ color: talking ? INK : INK_SOFT }}>
+                        {p.name}
+                      </span>
+                    </div>
+                  );
+                })}
+                <div className="flex w-[54px] shrink-0 flex-col items-center gap-1.5">
+                  <span className="grid h-[50px] w-[50px] place-items-center rounded-full text-[13px] font-bold" style={{ backgroundColor: CHIP, color: INK_SOFT }}>
+                    +{24 - PEOPLE.length}
+                  </span>
+                  <span className="text-[11px] font-medium" style={{ color: INK_SOFT }}>
+                    More
+                  </span>
+                </div>
+              </div>
+            </section>
+          </>
+        )}
+      </div>
 
       {/* Control bar */}
       <div className="px-4" style={{ paddingBottom: "16px" }}>
