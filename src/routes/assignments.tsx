@@ -27,12 +27,17 @@ import cardPurple from "@/assets/card-purple.png";
 import cardRed from "@/assets/card-red.png";
 import cardYellow from "@/assets/card-yellow.png";
 import cardGreen from "@/assets/card-green.png";
+import { useAuth } from "@/lib/auth";
+import { getLastOpenedClassId, useClassOverview } from "@/lib/classes";
+import { useSharedWork } from "@/lib/teacher-work";
 
 /* -------------------------------------------------------------------------- */
 /*  Route (routes/assignments.tsx  ->  /assignments)                          */
 /* -------------------------------------------------------------------------- */
 
 export const Route = createFileRoute("/assignments")({
+  validateSearch: (search: Record<string, unknown>): { classId?: string } =>
+    typeof search["classId"] === "string" ? { classId: search["classId"] } : {},
   head: () => ({
     meta: [
       { title: "Assignments | ENG 201" },
@@ -48,7 +53,16 @@ export const Route = createFileRoute("/assignments")({
 
 function AssignmentsRoute() {
   const router = useRouter();
-  return <AssignmentsPage onBack={() => router.history.back()} />;
+  const { user } = useAuth();
+  const { classId: searchedClassId } = Route.useSearch();
+  const classId = searchedClassId ?? getLastOpenedClassId(user?.id);
+  const overviewQuery = useClassOverview(classId);
+  const workQuery = useSharedWork(classId);
+  if (overviewQuery.isPending || workQuery.isPending) return <div className="min-h-screen bg-[#EEF1F5]" />;
+  const assignments: Assignment[] = (workQuery.data ?? [])
+    .filter((item) => item.type === "Assignment")
+    .map((item) => ({ id: item.id, title: item.title, type: "homework", dueAt: item.dueAt, points: item.points ?? 0, status: "todo", attachments: item.attachmentCount, submitted: item.submitted, total: item.total }));
+  return <AssignmentsPage role={overviewQuery.data?.myRole === "teacher" ? "instructor" : "student"} classCode={overviewQuery.data?.courseCode ?? "Your class"} courseName={overviewQuery.data?.name ?? "Assignments"} assignments={assignments} onBack={() => router.history.back()} />;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -76,7 +90,7 @@ export interface AssignmentsPageProps {
   role?: "student" | "instructor";
   classCode?: string; // e.g. "ENG 201"
   courseName?: string; // e.g. "Engineering Mechanics"
-  assignments?: Assignment[]; // omit to preview with demo data
+  assignments?: Assignment[];
   onBack?: () => void;
   onOpenAssignment?: (assignment: Assignment) => void;
   onCreate?: () => void; // instructor only
@@ -199,7 +213,7 @@ export function AssignmentsPage({
 
   const rows: Row[] = useMemo(() => {
     if (!now) return [];
-    return (assignments ?? buildDemo(now))
+    return (assignments ?? [])
       .map((a) => {
         const due = new Date(a.dueAt);
         const t: Tab = a.status === "graded" ? "graded" : a.status === "submitted" ? "submitted" : "todo";

@@ -234,7 +234,8 @@ function TeacherClass() {
   const classId = searchedClassId ?? getLastOpenedClassId(user?.id);
   const overviewQuery = useClassOverview(classId);
   const overview = overviewQuery.data;
-  const shared = useSharedWork();
+  const sharedQuery = useSharedWork(classId);
+  const shared = sharedQuery.data ?? [];
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuEverOpened, setMenuEverOpened] = useState(false);
@@ -466,7 +467,7 @@ function TeacherClass() {
 
         {/* Class sections */}
         <div className="mt-6 px-6">
-         <ClassSections exclude={["Assignments", "Assessments"]} />
+         <ClassSections exclude={["Assignments", "Assessments"]} classId={overview.id} />
         </div>
 
         {/* Shared with class */}
@@ -542,7 +543,7 @@ function TeacherClass() {
       </div>
 
       <WorkFloatingActionButton
-        onSelect={(type) => router.navigate({ to: "/new-work", search: { type } })}
+        onSelect={(type) => router.navigate({ to: "/new-work", search: { type, classId: overview.id } })}
       />
 
       {confirm && (

@@ -39,6 +39,7 @@ import {
   regenerateJoinCode,
   setClassArchived,
 } from "@/lib/classes";
+import { useSharedWork } from "@/lib/teacher-work";
 
 export const Route = createFileRoute("/class")({
   validateSearch: (search: Record<string, unknown>): { classId?: string } => {
@@ -113,8 +114,6 @@ type ClassworkItem = {
   status: "done" | "due" | "upcoming";
   due?: string;
 };
-
-const classwork: ClassworkItem[] = [];
 
 function ClassState({
   title,
@@ -192,10 +191,21 @@ function ClassHome() {
   const classId = searchedClassId ?? getLastOpenedClassId(user?.id);
   const overviewQuery = useClassOverview(classId);
   const overview = overviewQuery.data;
-  const doneCount = classwork.filter((i) => i.status === "done").length;
+  const workQuery = useSharedWork(classId);
+  const classwork: ClassworkItem[] = (workQuery.data ?? []).slice().sort((a, b) => a.due.localeCompare(b.due)).map((item) => {
+    const due = item.due.replace(/^Due |^Closed /, ""); const parsed = new Date(due);
+    return { day: Number.isNaN(parsed.getTime()) ? "" : String(parsed.getDate()), month: Number.isNaN(parsed.getTime()) ? "" : parsed.toLocaleDateString("en-US", { month: "short" }), title: item.title, meta: item.type, status: "upcoming", due: item.due };
+  });
+  const doneCount = 0;
+  const counts = (workQuery.data ?? []).reduce<{ Assignments: number; Assessments: number }>((result, item) => { if (item.type === "Assignment") result.Assignments += 1; if (item.type === "Assessment") result.Assessments += 1; return result; }, { Assignments: 0, Assessments: 0 });
   const schedule = overview ? formatSchedule(overview.scheduleDays, overview.scheduleTime) : null;
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuEverOpened, setMenuEverOpened] = useState(false);
+  useEffect(() => {
+    if (overview?.myRole === "teacher") {
+      void router.navigate({ to: "/teacher", search: { classId: overview.id }, replace: true });
+    }
+  }, [overview, router]);
   useEffect(() => { if (menuOpen) setMenuEverOpened(true); }, [menuOpen]);
   const [confirm, setConfirm] = useState<"regenerate" | "archive" | "delete" | "leave" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -228,6 +238,8 @@ function ClassHome() {
   }
 
   if (overviewQuery.isPending || !overview) return <ClassLoading />;
+
+  if (overview.myRole === "teacher") return <ClassLoading />;
 
   return (
     <div className="min-h-screen bg-background">
@@ -336,16 +348,16 @@ function ClassHome() {
         <div className="px-4">
           {/* Quick access */}
           <div className="mt-6">
-            <ClassSections />
+            <ClassSections counts={counts} classId={overview.id} />
           </div>
 
           {/* Class work */}
           <div className="mt-7">
             <div className="flex items-baseline justify-between">
-              <Link to="/classwork" className="text-base font-bold text-slate-900">
+              <Link to="/classwork" search={{ classId: overview.id }} className="text-base font-bold text-slate-900">
                 Class work
               </Link>
-              <Link to="/classwork" className="text-xs font-medium text-slate-400">
+              <Link to="/classwork" search={{ classId: overview.id }} className="text-xs font-medium text-slate-400">
                 {doneCount} of {classwork.length} done
               </Link>
             </div>
@@ -377,9 +389,8 @@ function ClassHome() {
               {classwork.map((item, i) => {
                 const isLast = i === classwork.length - 1;
                 return (
-                  <Link
+                  <div
                     key={item.title}
-                    to="/classwork"
                     className="relative flex gap-3 transition-opacity active:opacity-70"
                   >
                     {!isLast && (
@@ -443,7 +454,7 @@ function ClassHome() {
                         {item.due}
                       </span>
                     )}
-                  </Link>
+                  </div>
                 );
               })}
             </div>

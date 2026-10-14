@@ -287,7 +287,7 @@ function Index() {
       />
     </div>}
 
-    <button onClick={() => current.id && router.navigate({ to: "/class", search: { classId: current.id } })} className="mt-6 flex w-full items-center justify-center gap-1.5 rounded-full bg-[#EEEBFC] px-5 py-3 text-sm font-semibold text-[#4C3FCC] transition-colors hover:bg-[#E3DEFB] active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#7C6FEE]">
+    <button onClick={() => current.id && router.navigate({ to: current.myRole === "teacher" ? "/teacher" : "/class", search: { classId: current.id } })} className="mt-6 flex w-full items-center justify-center gap-1.5 rounded-full bg-[#EEEBFC] px-5 py-3 text-sm font-semibold text-[#4C3FCC] transition-colors hover:bg-[#E3DEFB] active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#7C6FEE]">
       Resume
       <ArrowUpRight className="h-4 w-4" strokeWidth={2.25} />
     </button>
@@ -327,7 +327,7 @@ function Index() {
                   key={course.title}
                   course={course}
                   index={i}
-                  onOpen={() => course.id && router.navigate({ to: "/class", search: { classId: course.id } })}
+                  onOpen={() => course.id && router.navigate({ to: course.myRole === "teacher" ? "/teacher" : "/class", search: { classId: course.id } })}
                 />
               ))}
             </ul>

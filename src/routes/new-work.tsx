@@ -18,21 +18,23 @@ import {
 } from "lucide-react";
 import type { WorkType } from "@/components/WorkFloatingActionButton";
 import QuestionBuilder, { type Question } from "@/components/QuestionBuilder";
-import { CLASS_SIZE } from "@/lib/teacher-work";
+import { createWork } from "@/lib/teacher-work";
+import { isClassId, useClassOverview } from "@/lib/classes";
 
 export const Route = createFileRoute("/new-work")({
-  validateSearch: (search: Record<string, unknown>): { type: WorkType } => ({
+  validateSearch: (search: Record<string, unknown>): { type: WorkType; classId?: string } => ({
     type:
-      search.type === "Classwork" || search.type === "Assessment"
-        ? (search.type as WorkType)
+      search["type"] === "Classwork" || search["type"] === "Assessment"
+        ? (search["type"] as WorkType)
         : "Assignment",
+    ...(typeof search["classId"] === "string" ? { classId: search["classId"] } : {}),
   }),
   head: () => ({
     meta: [
-      { title: "New Work | MCE 201 Teacher Hub" },
+      { title: "New Work | Teacher Hub" },
       {
         name: "description",
-        content: "Create assignments, classwork and assessments for your MCE 201 Applied Mechanics class.",
+        content: "Create an assignment, classwork or assessment for your class.",
       },
     ],
   }),
@@ -297,13 +299,16 @@ function Expandable({
 /* ---------- Page ---------- */
 
 function NewWork() {
-  const { type } = Route.useSearch();
+  const { type, classId } = Route.useSearch();
   const cfg = TYPE_CONFIG[type];
+  const overviewQuery = useClassOverview(classId);
 
   const [title, setTitle] = useState("");
   const [instructions, setInstructions] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [phase, setPhase] = useState<"edit" | "sharing" | "done">("edit");
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [failedFiles, setFailedFiles] = useState<string[]>([]);
 
   // Date
   const [today, setToday] = useState<Date | null>(null);
@@ -362,7 +367,7 @@ function NewWork() {
   }, [type]);
 
   useEffect(() => {
-    document.title = `New ${type} | MCE 201 Teacher Hub`;
+    document.title = `New ${type} | Teacher Hub`;
   }, [type]);
 
   useEffect(
@@ -456,10 +461,18 @@ function NewWork() {
     if (!pointsOpen && graded && !pointsValid) setPointsText(cfg.points);
   }, [pointsOpen, graded, pointsValid, cfg.points]);
 
+  if (!classId || !isClassId(classId) || overviewQuery.isError || overviewQuery.data === null) {
+    return <main className="mx-auto min-h-screen w-full max-w-md bg-background px-6 pt-12 text-center"><h1 className="text-lg font-bold text-foreground">Class not found</h1><p className="mt-2 text-sm text-muted-foreground">This class does not exist or you don't have access.</p><Link to="/courses" className="mt-5 inline-block rounded-full bg-feature px-5 py-2.5 text-sm font-bold text-white">Back to classes</Link></main>;
+  }
+  if (overviewQuery.isPending) return <main className="min-h-screen bg-background" />;
+  if (overviewQuery.data.myRole !== "teacher" || overviewQuery.data.archived) {
+    return <main className="mx-auto min-h-screen w-full max-w-md bg-background px-6 pt-12 text-center"><h1 className="text-lg font-bold text-foreground">Sharing is unavailable</h1><p className="mt-2 text-sm text-muted-foreground">Only teachers can share work in an active class.</p><Link to="/courses" className="mt-5 inline-block rounded-full bg-feature px-5 py-2.5 text-sm font-bold text-white">Back to classes</Link></main>;
+  }
+
   /* ----- Files ----- */
   const onPickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files ?? []);
-    if (picked.length) setFiles((cur) => [...cur, ...picked]);
+    if (picked.length) setFiles((cur) => [...cur, ...picked].slice(0, 5));
     e.target.value = "";
   };
 
@@ -467,7 +480,7 @@ function NewWork() {
   const trimmedTitle = title.trim();
   const ready = trimmedTitle.length > 0 && dueInFuture && (!graded || pointsValid);
 
-  const share = () => {
+  const share = async () => {
     if (phase !== "edit") return;
     const latest = buildDue();
     if (!trimmedTitle || !latest || (graded && !pointsValid)) return;
@@ -476,12 +489,16 @@ function NewWork() {
       setTick((t) => t + 1);
       return;
     }
-    setOpenRow(null);
+    if (!classId || !isClassId(classId)) { setShareError("This class could not be found."); return; }
+    setShareError(null); setFailedFiles([]); setOpenRow(null);
     setPhase("sharing");
-    // Replace this timer with your real save call (store update or API request).
-    // `latest` is the due date as a Date. Send `graded ? pointsValue : null` for points,
-    // and `questions` too for assessments.
-    timerRef.current = setTimeout(() => setPhase("done"), 700);
+    const started = Date.now();
+    try {
+      const result = await createWork({ classId, type, title: trimmedTitle, instructions, dueAt: latest, points: graded ? pointsValue : null, durationMinutes: type === "Assessment" ? duration : null, questions: type === "Assessment" ? questions : [], files });
+      setFailedFiles(result.failedFiles);
+      const remaining = Math.max(0, 700 - (Date.now() - started));
+      timerRef.current = setTimeout(() => setPhase("done"), remaining);
+    } catch (error) { setShareError(error instanceof Error ? error.message : "We couldn't share this work. Please try again."); setPhase("edit"); }
   };
 
   const reset = () => {
@@ -529,7 +546,7 @@ function NewWork() {
               {questions.length > 0
                 ? ` · ${questions.length} ${questions.length === 1 ? "question" : "questions"}`
                 : ""}{" "}
-              · {CLASS_SIZE} students
+               {failedFiles.length ? ` · ${failedFiles.join(", ")} could not upload` : ""}
             </p>
           </div>
         </div>
@@ -539,6 +556,7 @@ function NewWork() {
         >
           <Link
             to="/teacher"
+            search={{ classId }}
             className="grid h-14 w-full place-items-center rounded-full bg-feature text-[15px] font-bold text-white transition-transform active:scale-[0.98]"
           >
             Back to Teacher Hub
@@ -589,6 +607,7 @@ function NewWork() {
       <div className="flex items-center justify-between px-6 pt-7">
         <Link
           to="/teacher"
+          search={{ classId }}
           aria-label="Go back"
           className="-ml-1 grid size-9 place-items-center rounded-full text-foreground transition-colors active:bg-muted"
         >
@@ -607,7 +626,7 @@ function NewWork() {
       </div>
 
       {/* Header */}
-      <header className="px-6 pt-6">
+        <header className="px-6 pt-6">
         <p className="text-[13px] font-medium text-muted-foreground">
           New {type.toLowerCase()} · MCE 201
         </p>
@@ -623,7 +642,8 @@ function NewWork() {
           enterKeyHint="next"
           className="mt-2 w-full bg-transparent text-[32px] font-extrabold leading-tight tracking-tight text-foreground outline-none placeholder:text-muted-foreground/40"
         />
-      </header>
+        </header>
+        {shareError && <p className="px-6 pt-2 text-[12px] font-medium text-red-500">{shareError}</p>}
 
       {/* Instructions */}
       <div className="mt-3 px-6">

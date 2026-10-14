@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { ArrowLeft, Search, X, Clock, FileText, Lock, CheckCircle2, ChevronRight } from "lucide-react";
 
@@ -7,8 +7,13 @@ import thermofluidsBg from "@/assets/thermofluids-bg.png";
 import thumbQuiz from "@/assets/thumb-quiz.jpg";
 import thumbCbt from "@/assets/thumb-cbt.jpg";
 import thumbAssignment from "@/assets/thumb-assignment.jpg";
+import { useAuth } from "@/lib/auth";
+import { getLastOpenedClassId, useClassOverview } from "@/lib/classes";
+import { useSharedWork } from "@/lib/teacher-work";
 
 export const Route = createFileRoute("/assessments")({
+  validateSearch: (search: Record<string, unknown>): { classId?: string } =>
+    typeof search["classId"] === "string" ? { classId: search["classId"] } : {},
   head: () => ({
     meta: [
       { title: "MCE 201 Assessments — Virtual Classroom" },
@@ -41,7 +46,7 @@ type Assessment = {
   status: Status;
 };
 
-const assessments: Assessment[] = [
+const demoAssessments: Assessment[] = [
   {
     id: "1",
     title: "Vectors & Equilibrium Quiz",
@@ -105,10 +110,26 @@ function StatusIcon({ status }: { status: Status }) {
 }
 
 function Assessments() {
+  const router = useRouter();
+  const { user } = useAuth();
+  const { classId: searchedClassId } = Route.useSearch();
+  const classId = searchedClassId ?? getLastOpenedClassId(user?.id);
+  const overviewQuery = useClassOverview(classId);
+  const workQuery = useSharedWork(classId);
   const [active, setActive] = useState<(typeof filters)[number]>("All");
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
 
+  const assessments = useMemo<Assessment[]>(() => {
+    const now = Date.now();
+    return (workQuery.data ?? []).filter((item) => item.type === "Assessment").map((item, index) => {
+      const start = new Date(item.dueAt);
+      const closes = start.getTime() + (item.durationMinutes ?? 0) * 60000;
+      const status: Status = now < start.getTime() ? "closed" : now < closes ? "open" : "closed";
+      const date = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      return { id: item.id, title: item.title, meta: item.questionCount ? `${item.questionCount} ${item.questionCount === 1 ? "question" : "questions"} · ${item.durationMinutes ?? 0} min` : `Written · ${item.durationMinutes ?? 0} min`, due: status === "open" ? `Open until ${new Date(closes).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : now < start.getTime() ? `Opens ${date}` : `Closed ${date}`, image: index % 2 ? thumbCbt : thumbQuiz, category: "Tests", status };
+    });
+  }, [workQuery.data]);
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
     return assessments.filter(
@@ -125,6 +146,7 @@ function Assessments() {
         <button
           type="button"
           aria-label="Go back"
+          onClick={() => router.history.back()}
           className="-ml-1 grid size-9 place-items-center rounded-full text-foreground transition-colors active:bg-muted"
         >
           <ArrowLeft className="size-[22px]" strokeWidth={2.2} />
@@ -152,7 +174,7 @@ function Assessments() {
           Assessments
         </h1>
         <p className="mt-2 text-[13px] font-medium text-muted-foreground">
-          MCE 201 · Applied Mechanics
+          {overviewQuery.data ? `${overviewQuery.data.courseCode} · ${overviewQuery.data.name}` : "Your class"}
         </p>
       </header>
 
@@ -191,11 +213,11 @@ function Assessments() {
       </div>
 
       {/* Featured card with peeking next card */}
-      <div className="no-scrollbar mt-6 flex gap-4 overflow-x-auto px-6 pb-2">
-        <article className="relative aspect-[4/5] w-[78%] shrink-0 overflow-hidden rounded-[28px] bg-feature shadow-feature">
+      {assessments.length > 0 && <div className="no-scrollbar mt-6 flex gap-4 overflow-x-auto px-6 pb-2">
+        {assessments.slice(0, 2).map((assessment, index) => <article key={assessment.id} className={`relative aspect-[4/5] w-[78%] shrink-0 overflow-hidden rounded-[28px] ${index === 0 ? "bg-feature shadow-feature" : "bg-feature-alt"}`}>
           <img
-            src={featuredImg}
-            alt="Exam sheet with pencil and ruler"
+            src={index === 0 ? featuredImg : thermofluidsBg}
+            alt=""
             width={1024}
             height={1024}
             className="pointer-events-none absolute inset-0 size-full translate-x-[-4%] translate-y-[-8%] scale-[1.1] object-cover"
@@ -204,18 +226,14 @@ function Assessments() {
 
           <div className="relative flex h-full flex-col justify-between p-6">
             <div>
-              <h2 className="text-[21px] font-extrabold leading-tight text-feature-foreground">
-                Applied Mechanics
-                <br />
-                Main Test
-              </h2>
+              <h2 className="text-[21px] font-extrabold leading-tight text-feature-foreground">{assessment.title}</h2>
               <p className="mt-1.5 text-[13px] font-semibold text-feature-foreground/80">
-                30 marks · 45 min
+                {assessment.meta}
               </p>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-[12px] font-semibold text-feature-foreground">
-                Closes today, 11:59 PM
+                {assessment.due}
               </span>
               <button
                 type="button"
@@ -225,33 +243,15 @@ function Assessments() {
               </button>
             </div>
           </div>
-        </article>
-
-        <article className="relative aspect-[4/5] w-[78%] shrink-0 overflow-hidden rounded-[28px] bg-feature-alt">
-          <img
-            src={thermofluidsBg}
-            alt=""
-            width={1254}
-            height={1254}
-            className="pointer-events-none absolute inset-0 size-full object-cover object-right-bottom"
-          />
-          <div className="relative p-6">
-            <h2 className="text-[21px] font-extrabold leading-tight text-primary">
-              Thermofluids
-              <br />
-              Practice Set
-            </h2>
-            <p className="mt-1.5 text-[13px] font-semibold text-primary/70">25 marks · 30 min</p>
-          </div>
-        </article>
-      </div>
+        </article>)}
+      </div>}
 
       {/* List */}
       <div className="mx-6 mt-7 grid grid-cols-3 rounded-2xl bg-surface py-4 text-center">
         {[
           { v: assessments.filter((a) => a.status === "open").length, l: "Open" },
-          { v: assessments.filter((a) => a.status === "done").length, l: "Completed" },
-          { v: "90%", l: "Avg. score" },
+          { v: assessments.filter((a) => a.status === "closed").length, l: "Scheduled" },
+          { v: "—", l: "Avg. score" },
         ].map((s, i) => (
           <div key={s.l} className={i > 0 ? "border-l border-border" : ""}>
             <p className="text-[18px] font-extrabold text-foreground">{s.v}</p>

@@ -16,8 +16,13 @@ import {
 } from "lucide-react";
 
 import featuredImg from "@/assets/featured-classworks.png";
+import { useAuth } from "@/lib/auth";
+import { getLastOpenedClassId, useClassOverview } from "@/lib/classes";
+import { useSharedWork } from "@/lib/teacher-work";
 
 export const Route = createFileRoute("/classwork")({
+  validateSearch: (search: Record<string, unknown>): { classId?: string } =>
+    typeof search["classId"] === "string" ? { classId: search["classId"] } : {},
   head: () => ({
     meta: [
       { title: "MCE 201 Classwork — Virtual Classroom" },
@@ -40,7 +45,7 @@ type Kind = Exclude<(typeof filters)[number], "All">;
 type Item = { id: string; title: string; meta: string; kind: Kind; posted: string; isNew?: boolean };
 type Week = { week: string; topic: string; items: Item[] };
 
-const weeks: Week[] = [
+const demoWeeks: Week[] = [
   {
     week: "Week 3",
     topic: "Friction & Belt Drives",
@@ -67,10 +72,30 @@ const resume = { title: "Lecture 5 - Dry Friction", weekLabel: "Week 3", page: 1
 const resumePercent = Math.round((resume.page / resume.totalPages) * 100);
 
 function Classwork() {
+  const { user } = useAuth();
+  const { classId: searchedClassId } = Route.useSearch();
+  const classId = searchedClassId ?? getLastOpenedClassId(user?.id);
+  const overviewQuery = useClassOverview(classId);
+  const workQuery = useSharedWork(classId);
   const [active, setActive] = useState<(typeof filters)[number]>("All");
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  const weeks = useMemo<Week[]>(() => {
+    const groups = new Map<string, Week>();
+    (workQuery.data ?? []).filter((item) => item.type === "Classwork").forEach((item) => {
+      const due = new Date(item.dueAt);
+      const weekStart = new Date(due); weekStart.setDate(due.getDate() - due.getDay());
+      const key = weekStart.toISOString().slice(0, 10);
+      const end = new Date(weekStart); end.setDate(end.getDate() + 6);
+      const label = `${weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+      const current = groups.get(key) ?? { week: `Week of ${label}`, topic: label, items: [] };
+      current.items.push({ id: item.id, title: item.title, meta: `Classwork · ${item.due}`, kind: "Assignments", posted: "Shared", isNew: false });
+      groups.set(key, current);
+    });
+    return [...groups.entries()].sort(([a], [b]) => b.localeCompare(a)).map(([, week]) => week);
+  }, [workQuery.data]);
 
   const grouped = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -90,7 +115,8 @@ function Classwork() {
     <main className="mx-auto min-h-screen w-full max-w-md bg-background pb-10">
       <div className="flex items-center justify-between px-6 pt-7">
         <Link
-          to="/"
+          to="/class"
+          search={classId ? { classId } : {}}
           aria-label="Go back"
           className="-ml-1 grid size-9 place-items-center rounded-full text-foreground transition-colors active:bg-muted"
         >
@@ -111,7 +137,7 @@ function Classwork() {
 
       <header className="px-6 pt-3">
         <h1 className="text-[32px] font-extrabold leading-none tracking-tight text-foreground">Classwork</h1>
-        <p className="mt-2 text-[13px] font-medium text-muted-foreground">MCE 201 · Applied Mechanics</p>
+        <p className="mt-2 text-[13px] font-medium text-muted-foreground">{overviewQuery.data ? `${overviewQuery.data.courseCode} · ${overviewQuery.data.name}` : "Your class"}</p>
       </header>
 
       {searching && (
@@ -146,7 +172,7 @@ function Classwork() {
       </div>
 
       {/* Continue card */}
-      <article className="relative isolate mx-6 mt-6 flex h-[360px] flex-col justify-between overflow-hidden rounded-[28px] bg-[#3f7f47] p-6 shadow-[0_18px_40px_-16px_rgba(45,100,55,0.55)]">
+      {false && <article className="relative isolate mx-6 mt-6 flex h-[360px] flex-col justify-between overflow-hidden rounded-[28px] bg-[#3f7f47] p-6 shadow-[0_18px_40px_-16px_rgba(45,100,55,0.55)]">
         {/* Background illustration */}
         <img
           src={featuredImg}
@@ -206,7 +232,7 @@ function Classwork() {
             <Play className="size-3 translate-x-[1px]" strokeWidth={0} fill="currentColor" />
           </span>
         </button>
-      </article>
+      </article>}
 
    
 
