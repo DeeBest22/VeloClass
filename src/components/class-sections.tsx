@@ -43,12 +43,13 @@ function CountBadge({ count, tint, size = "sm" }: { count: number; tint: Tint; s
   );
 }
 
-function FeaturedCard({ section }: { section: ClassSection }) {
+function FeaturedCard({ section, classId }: { section: ClassSection; classId?: string }) {
   const tint = TINTS[section.tint];
   const Icon = section.icon;
   return (
     <Link
       to={section.to}
+      search={classId ? { classId } : {}}
       className="col-span-2 flex items-center gap-4 rounded-tile border border-slate-200 bg-white p-4 text-left transition-transform active:scale-95"
     >
       <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-chip ${tint.chip}`}>
@@ -65,12 +66,13 @@ function FeaturedCard({ section }: { section: ClassSection }) {
   );
 }
 
-function SectionCard({ section }: { section: ClassSection }) {
+function SectionCard({ section, classId }: { section: ClassSection; classId?: string }) {
   const tint = TINTS[section.tint];
   const Icon = section.icon;
   return (
     <Link
       to={section.to}
+      search={classId ? { classId } : {}}
       className="flex flex-col gap-3 rounded-tile border border-slate-200 bg-white p-3.5 text-left transition-transform active:scale-95"
     >
       <span className="flex items-center justify-between">
@@ -89,9 +91,11 @@ type ClassSectionCounts = Partial<Record<ClassSection["label"], number>>;
 export default function ClassSections({
   counts = {},
   exclude = [],
+  classId,
 }: {
   counts?: ClassSectionCounts;
   exclude?: ClassSection["label"][];
+  classId?: string;
 }) {
   const visibleSections = sections
     .filter((s) => !exclude.includes(s.label))
@@ -111,9 +115,9 @@ export default function ClassSections({
       </div>
       <div className="mt-3 border-t border-slate-200" />
       <div className="mt-4 grid grid-cols-2 gap-3">
-        <FeaturedCard section={featured} />
+        <FeaturedCard section={featured} classId={classId} />
         {rest.map((s) => (
-          <SectionCard key={s.label} section={s} />
+          <SectionCard key={s.label} section={s} classId={classId} />
         ))}
       </div>
     </div>
