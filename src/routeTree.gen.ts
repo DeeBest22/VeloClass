@@ -26,8 +26,13 @@ import { Route as FilesRouteImport } from './routes/files'
 import { Route as FolderRouteImport } from './routes/folder'
 import { Route as JoinRouteImport } from './routes/join'
 import { Route as LiveClassRouteImport } from './routes/live-class'
+import { Route as MembersRouteImport } from './routes/members'
+import { Route as NewWorkRouteImport } from './routes/new-work'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as ProfileRouteImport } from './routes/profile'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
+import { Route as TeacherRouteImport } from './routes/teacher'
+import { Route as TeacherSpareRouteImport } from './routes/teacherSpare'
 import { Route as WhiteboardRouteImport } from './routes/whiteboard'
 import { Route as FilesFolderIdRouteImport } from './routes/files_.$folderId'
 
@@ -116,6 +121,16 @@ const LiveClassRoute = LiveClassRouteImport.update({
   path: '/live-class',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MembersRoute = MembersRouteImport.update({
+  id: '/members',
+  path: '/members',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NewWorkRoute = NewWorkRouteImport.update({
+  id: '/new-work',
+  path: '/new-work',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OnboardingRoute = OnboardingRouteImport.update({
   id: '/onboarding',
   path: '/onboarding',
@@ -124,6 +139,21 @@ const OnboardingRoute = OnboardingRouteImport.update({
 const ProfileRoute = ProfileRouteImport.update({
   id: '/profile',
   path: '/profile',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TeacherRoute = TeacherRouteImport.update({
+  id: '/teacher',
+  path: '/teacher',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TeacherSpareRoute = TeacherSpareRouteImport.update({
+  id: '/teacherSpare',
+  path: '/teacherSpare',
   getParentRoute: () => rootRouteImport,
 } as any)
 const WhiteboardRoute = WhiteboardRouteImport.update({
@@ -155,8 +185,13 @@ export interface FileRoutesByFullPath {
   '/folder': typeof FolderRoute
   '/join': typeof JoinRoute
   '/live-class': typeof LiveClassRoute
+  '/members': typeof MembersRoute
+  '/new-work': typeof NewWorkRoute
   '/onboarding': typeof OnboardingRoute
   '/profile': typeof ProfileRoute
+  '/reset-password': typeof ResetPasswordRoute
+  '/teacher': typeof TeacherRoute
+  '/teacherSpare': typeof TeacherSpareRoute
   '/whiteboard': typeof WhiteboardRoute
   '/files/$folderId': typeof FilesFolderIdRoute
 }
@@ -178,8 +213,13 @@ export interface FileRoutesByTo {
   '/folder': typeof FolderRoute
   '/join': typeof JoinRoute
   '/live-class': typeof LiveClassRoute
+  '/members': typeof MembersRoute
+  '/new-work': typeof NewWorkRoute
   '/onboarding': typeof OnboardingRoute
   '/profile': typeof ProfileRoute
+  '/reset-password': typeof ResetPasswordRoute
+  '/teacher': typeof TeacherRoute
+  '/teacherSpare': typeof TeacherSpareRoute
   '/whiteboard': typeof WhiteboardRoute
   '/files/$folderId': typeof FilesFolderIdRoute
 }
@@ -202,8 +242,13 @@ export interface FileRoutesById {
   '/folder': typeof FolderRoute
   '/join': typeof JoinRoute
   '/live-class': typeof LiveClassRoute
+  '/members': typeof MembersRoute
+  '/new-work': typeof NewWorkRoute
   '/onboarding': typeof OnboardingRoute
   '/profile': typeof ProfileRoute
+  '/reset-password': typeof ResetPasswordRoute
+  '/teacher': typeof TeacherRoute
+  '/teacherSpare': typeof TeacherSpareRoute
   '/whiteboard': typeof WhiteboardRoute
   '/files_/$folderId': typeof FilesFolderIdRoute
 }
@@ -227,8 +272,13 @@ export interface FileRouteTypes {
     | '/folder'
     | '/join'
     | '/live-class'
+    | '/members'
+    | '/new-work'
     | '/onboarding'
     | '/profile'
+    | '/reset-password'
+    | '/teacher'
+    | '/teacherSpare'
     | '/whiteboard'
     | '/files/$folderId'
   fileRoutesByTo: FileRoutesByTo
@@ -250,8 +300,13 @@ export interface FileRouteTypes {
     | '/folder'
     | '/join'
     | '/live-class'
+    | '/members'
+    | '/new-work'
     | '/onboarding'
     | '/profile'
+    | '/reset-password'
+    | '/teacher'
+    | '/teacherSpare'
     | '/whiteboard'
     | '/files/$folderId'
   id:
@@ -273,8 +328,13 @@ export interface FileRouteTypes {
     | '/folder'
     | '/join'
     | '/live-class'
+    | '/members'
+    | '/new-work'
     | '/onboarding'
     | '/profile'
+    | '/reset-password'
+    | '/teacher'
+    | '/teacherSpare'
     | '/whiteboard'
     | '/files_/$folderId'
   fileRoutesById: FileRoutesById
@@ -297,8 +357,13 @@ export interface RootRouteChildren {
   FolderRoute: typeof FolderRoute
   JoinRoute: typeof JoinRoute
   LiveClassRoute: typeof LiveClassRoute
+  MembersRoute: typeof MembersRoute
+  NewWorkRoute: typeof NewWorkRoute
   OnboardingRoute: typeof OnboardingRoute
   ProfileRoute: typeof ProfileRoute
+  ResetPasswordRoute: typeof ResetPasswordRoute
+  TeacherRoute: typeof TeacherRoute
+  TeacherSpareRoute: typeof TeacherSpareRoute
   WhiteboardRoute: typeof WhiteboardRoute
   FilesFolderIdRoute: typeof FilesFolderIdRoute
 }
@@ -424,6 +489,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LiveClassRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/members': {
+      id: '/members'
+      path: '/members'
+      fullPath: '/members'
+      preLoaderRoute: typeof MembersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/new-work': {
+      id: '/new-work'
+      path: '/new-work'
+      fullPath: '/new-work'
+      preLoaderRoute: typeof NewWorkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/onboarding': {
       id: '/onboarding'
       path: '/onboarding'
@@ -436,6 +515,27 @@ declare module '@tanstack/react-router' {
       path: '/profile'
       fullPath: '/profile'
       preLoaderRoute: typeof ProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/teacher': {
+      id: '/teacher'
+      path: '/teacher'
+      fullPath: '/teacher'
+      preLoaderRoute: typeof TeacherRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/teacherSpare': {
+      id: '/teacherSpare'
+      path: '/teacherSpare'
+      fullPath: '/teacherSpare'
+      preLoaderRoute: typeof TeacherSpareRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/whiteboard': {
@@ -473,8 +573,13 @@ const rootRouteChildren: RootRouteChildren = {
   FolderRoute: FolderRoute,
   JoinRoute: JoinRoute,
   LiveClassRoute: LiveClassRoute,
+  MembersRoute: MembersRoute,
+  NewWorkRoute: NewWorkRoute,
   OnboardingRoute: OnboardingRoute,
   ProfileRoute: ProfileRoute,
+  ResetPasswordRoute: ResetPasswordRoute,
+  TeacherRoute: TeacherRoute,
+  TeacherSpareRoute: TeacherSpareRoute,
   WhiteboardRoute: WhiteboardRoute,
   FilesFolderIdRoute: FilesFolderIdRoute,
 }
