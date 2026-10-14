@@ -75,6 +75,24 @@ export type Database = {
         Update: Partial<ClassFileRow>;
         Relationships: [];
       };
+      work_items: {
+        Row: { id: string; class_id: string; author_id: string; type: 'assignment' | 'classwork' | 'assessment'; title: string; instructions: string; due_at: string; duration_minutes: number | null; points: number | null; created_at: string };
+        Insert: Omit<Database['public']['Tables']['work_items']['Row'], 'id' | 'created_at'> & { id?: string; created_at?: string };
+        Update: Partial<Database['public']['Tables']['work_items']['Row']>;
+        Relationships: [];
+      };
+      work_questions: {
+        Row: { id: string; work_id: string; position: number; text: string; options: string[]; correct_index: number; difficulty: 'easy' | 'medium' | 'hard' };
+        Insert: Omit<Database['public']['Tables']['work_questions']['Row'], 'id'> & { id?: string };
+        Update: Partial<Database['public']['Tables']['work_questions']['Row']>;
+        Relationships: [];
+      };
+      work_attachments: {
+        Row: { id: string; work_id: string; class_id: string; storage_path: string; file_name: string; size_bytes: number; mime_type: string; created_at: string };
+        Insert: Omit<Database['public']['Tables']['work_attachments']['Row'], 'id' | 'created_at'> & { id?: string; created_at?: string };
+        Update: Partial<Database['public']['Tables']['work_attachments']['Row']>;
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -144,6 +162,9 @@ export type Database = {
       leave_class: { Args: { p_class_id: string }; Returns: undefined };
       remove_member: { Args: { p_class_id: string; p_user_id: string }; Returns: undefined };
       list_class_members: { Args: { p_class_id: string }; Returns: { user_id: string; display_name: string; role: 'teacher' | 'student'; joined_at: string; is_me: boolean }[] };
+      create_work: { Args: { p_class_id: string; p_type: string; p_title: string; p_instructions: string; p_due_at: string; p_duration_minutes: number | null; p_points: number | null; p_questions: Json }; Returns: string };
+      register_work_attachment: { Args: { p_work_id: string; p_path: string; p_name: string; p_size: number; p_mime: string }; Returns: undefined };
+      list_class_work: { Args: { p_class_id: string }; Returns: { id: string; type: 'assignment' | 'classwork' | 'assessment'; title: string; instructions: string; due_at: string; duration_minutes: number | null; points: number | null; question_count: number; attachment_count: number; total_students: number; submitted_count: number; status: 'open' | 'grading' | 'done' }[] };
     };
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };
