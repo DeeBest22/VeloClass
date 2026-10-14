@@ -84,10 +84,21 @@ function SectionCard({ section }: { section: ClassSection }) {
   );
 }
 
-export default function ClassSections() {
-  const featured = sections.reduce((a, b) => (b.count > a.count ? b : a), sections[0]);
-  const rest = sections.filter((s) => s !== featured);
-  const total = sections.reduce((sum, s) => sum + s.count, 0);
+type ClassSectionCounts = Partial<Record<ClassSection["label"], number>>;
+
+export default function ClassSections({
+  counts = {},
+  exclude = [],
+}: {
+  counts?: ClassSectionCounts;
+  exclude?: ClassSection["label"][];
+}) {
+  const visibleSections = sections
+    .filter((s) => !exclude.includes(s.label))
+    .map((section) => ({ ...section, count: counts[section.label] ?? 0 }));
+  const featured = visibleSections.reduce((a, b) => (b.count > a.count ? b : a), visibleSections[0]);
+  const rest = visibleSections.filter((s) => s !== featured);
+  const total = visibleSections.reduce((sum, s) => sum + s.count, 0);
 
   return (
     <div className="mx-auto w-full max-w-sm rounded-tile bg-slate-50 p-5">
