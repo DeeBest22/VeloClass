@@ -1,13 +1,14 @@
 import { useState, type ReactNode } from "react";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { LogIn, Mail, UserPlus } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
+import { useAuth } from "@/lib/auth";
 
 type Mode = "signup" | "login";
 
 export const Route = createFileRoute("/AuthMethods")({
   validateSearch: (search: Record<string, unknown>): { mode: Mode } => ({
-    mode: search.mode === "login" ? "login" : "signup",
+    mode: search["mode"] === "login" ? "login" : "signup",
   }),
   head: () => ({
     meta: [
@@ -106,23 +107,25 @@ function Spinner() {
 
 function AuthMethodsPage() {
   const { mode } = Route.useSearch();
-  const navigate = useNavigate();
+  const { signInWithProvider } = useAuth();
   const [pending, setPending] = useState<Provider | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const isSignup = mode === "signup";
   const t = copy[mode];
   const ChipIcon = isSignup ? UserPlus : LogIn;
   const busy = pending !== null;
 
-  // TODO: replace with your real OAuth calls. "mode" tells you whether the
-  // person tapped sign up or log in. Many providers handle both in one step.
-  // For now each option shows a short loading state, then continues to "/".
+  // Web: the tab redirects to the provider and comes back signed in.
+  // Native: the provider opens in an in-app browser and returns through the deep link.
+  // Google, Facebook and Apple must be enabled in Supabase -> Authentication -> Providers.
   const continueWith = async (provider: Provider) => {
     if (busy) return;
+    setError(null);
     setPending(provider);
-    await new Promise((r) => setTimeout(r, 700));
+    const res = await signInWithProvider(provider);
+    if (res.error) setError(res.error);
     setPending(null);
-    navigate({ to: "/" });
   };
 
   return (
@@ -149,6 +152,11 @@ function AuthMethodsPage() {
           className="rise-in flex flex-col gap-3 pb-6"
           style={{ animationDelay: "0.12s" }}
         >
+          {error && (
+            <p role="alert" className="rounded-[10px] border border-destructive/30 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
+              {error}
+            </p>
+          )}
           {socials.map(({ id, name, icon }) => (
             <button
               key={id}

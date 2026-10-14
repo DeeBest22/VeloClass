@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { useRouter, createFileRoute } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, Check, Copy, Share2, ChevronDown, X } from "lucide-react";
+import { toast } from "sonner";
+import { createClass, updateClass, useClassOverview } from "@/lib/classes";
+import { profileFromUser, useAuth } from "@/lib/auth";
 
 // ── Design tokens ────────────────────────────────────────────────────────
 // Cool paper-white surface, near-black warm-charcoal ink, violet brand accent.
@@ -30,27 +33,25 @@ const chalkColors = [
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-function makeJoinCode() {
-  const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I
-  const part = () =>
-    Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-  return `${part()}-${part()}`;
-}
-
 function CreateClass() {
   const router = useRouter();
+  const { user } = useAuth();
+  const { classId } = Route.useSearch();
+  const overviewQuery = useClassOverview(classId);
+  const editing = Boolean(classId);
   const goBack = () => router.history.back();
 
   const [step, setStep] = useState("form"); // 'form' | 'success'
   const [loading, setLoading] = useState(false);
   const [joinCode, setJoinCode] = useState("");
+  const [createdClassId, setCreatedClassId] = useState("");
   const [copyState, setCopyState] = useState("idle"); // idle | copied
 
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [color, setColor] = useState(chalkColors[0].hex);
   const [description, setDescription] = useState("");
-  const [selectedDays, setSelectedDays] = useState(["Mon", "Thu"]);
+  const [selectedDays, setSelectedDays] = useState<Array<"Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun">>(["Mon", "Thu"]);
   const [time, setTime] = useState("10:00");
   const [skipSchedule, setSkipSchedule] = useState(false);
   const [department, setDepartment] = useState("");
@@ -58,6 +59,12 @@ function CreateClass() {
   const [touched, setTouched] = useState({ name: false, code: false });
 
   const nameRef = useRef(null);
+
+  useEffect(() => {
+    const overview = overviewQuery.data;
+    if (!editing || !overview || overview.myRole !== "teacher") return;
+    setName(overview.name); setCode(overview.courseCode); setColor(overview.color); setDescription(overview.description ?? ""); setDepartment(overview.department ?? ""); setSelectedDays((overview.scheduleDays ?? ["Mon", "Thu"]) as Array<"Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun">); setTime(overview.scheduleTime ?? "10:00"); setSkipSchedule(!overview.scheduleDays);
+  }, [editing, overviewQuery.data]);
 
   const nameError = touched.name && name.trim().length === 0;
   const codeError = touched.code && code.trim().length === 0;
@@ -67,21 +74,43 @@ function CreateClass() {
     setSelectedDays((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]));
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     setTouched({ name: true, code: true });
-    if (name.trim().length === 0 || code.trim().length === 0) return;
+    if (name.trim().length === 0 || code.trim().length === 0 || loading) return;
     setLoading(true);
-    window.setTimeout(() => {
-      setJoinCode(makeJoinCode());
+    try {
+      const input = {
+        name,
+        courseCode: code,
+        color,
+        description: description.trim() || null,
+        department: department.trim() || null,
+        scheduleDays: skipSchedule ? null : selectedDays,
+        scheduleTime: skipSchedule ? null : time,
+        displayName: profileFromUser(user).name || null,
+      };
+      if (editing && classId) {
+        await updateClass(classId, input);
+        toast.success("Class updated");
+        router.navigate({ to: "/class", search: { classId } });
+        return;
+      }
+      const result = await createClass(input);
+      setJoinCode(`${result.joinCode.slice(0, 4)}-${result.joinCode.slice(4)}`);
+      setCreatedClassId(result.id);
       setLoading(false);
       setStep("success");
-    }, 700);
+    } catch (error) {
+      setLoading(false);
+      toast.error(error instanceof Error ? error.message : "We couldn't create your class. Please try again.");
+    }
   };
 
   const resetAll = () => {
     setStep("form");
     setLoading(false);
     setJoinCode("");
+    setCreatedClassId("");
     setCopyState("idle");
     setName("");
     setCode("");
@@ -96,7 +125,7 @@ function CreateClass() {
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(joinCode.replace("-", ""));
+      await navigator.clipboard.writeText(joinCode);
     } catch (e) {
       /* clipboard may be unavailable in this preview — state still updates */
     }
@@ -186,7 +215,7 @@ function CreateClass() {
           />
         ) : (
           <SuccessStep
-            {...{ name, joinCode, copyState, handleCopy, handleShare, resetAll, goBack }}
+            {...{ name, joinCode, copyState, handleCopy, handleShare, resetAll, goBack, createdClassId }}
           />
         )}
       </div>
@@ -428,7 +457,8 @@ function Field({ label, optional, last, children }) {
 
 // ── Step 2: Success ──────────────────────────────────────────────────────
 
-function SuccessStep({ name, joinCode, copyState, handleCopy, handleShare, resetAll, goBack }) {
+function SuccessStep({ name, joinCode, copyState, handleCopy, handleShare, resetAll, goBack, createdClassId }) {
+  const router = useRouter();
   return (
     <div className="flex-1 flex flex-col px-6 pt-6 pb-10">
       <button
@@ -519,7 +549,7 @@ function SuccessStep({ name, joinCode, copyState, handleCopy, handleShare, reset
       </div>
 
       <button
-        onClick={resetAll}
+        onClick={() => router.navigate({ to: "/class", search: { classId: createdClassId } })}
         className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl text-sm font-semibold transition-all active:scale-95 mt-6"
         style={{ background: tokens.accent, color: "#FFFFFF" }}
       >
@@ -530,5 +560,9 @@ function SuccessStep({ name, joinCode, copyState, handleCopy, handleShare, reset
   );
 }
 export const Route = createFileRoute("/create")({
+  validateSearch: (search: Record<string, unknown>): { classId?: string } => {
+    const classId = search["classId"];
+    return typeof classId === "string" ? { classId } : {};
+  },
   component: CreateClass,
 });

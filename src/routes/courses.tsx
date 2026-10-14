@@ -1,5 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 import {
   Plus,
   Search,
@@ -7,8 +7,19 @@ import {
   Megaphone,
   Users,
   Code2,
+  BookOpen,
+  FlaskConical,
+  ListChecks,
+  NotebookPen,
   type LucideIcon,
 } from "lucide-react";
+import { useAuth } from "@/lib/auth";
+import noCourses from "@/assets/no-courses.png";
+import cardGreen from "@/assets/card-green.png";
+import cardPurple from "@/assets/card-purple.png";
+import cardRed from "@/assets/card-red.png";
+import cardYellow from "@/assets/card-yellow.png";
+import { getLastOpenedClassId, roleLabel, useMyClasses } from "@/lib/classes";
 
 export const Route = createFileRoute("/courses")({
   head: () => ({
@@ -42,6 +53,12 @@ type Course = {
   category: string;
   lessons: number;
   done: number;
+  id?: string;
+  color?: string;
+  role?: "teacher" | "student";
+  studentCount?: number;
+  archived?: boolean;
+  real?: boolean;
 };
 
 const courses: Course[] = [
@@ -71,70 +88,65 @@ function accentFor(category: string) {
   return ACCENTS[category] ?? DEFAULT_ACCENT;
 }
 
-const RING_R = 15;
-const RING_C = 2 * Math.PI * RING_R;
+const CARD_STYLES = [
+  { bg: cardPurple, ink: "#FFFFFF", chip: "rgba(255,255,255,0.22)", arrow: "#744BFF" },
+  { bg: cardRed, ink: "#FFFFFF", chip: "rgba(255,255,255,0.22)", arrow: "#FF5D52" },
+  { bg: cardYellow, ink: "#2A1F05", chip: "rgba(255,255,255,0.42)", arrow: "#E9A21A" },
+  { bg: cardGreen, ink: "#FFFFFF", chip: "rgba(255,255,255,0.22)", arrow: "#4DB35D" },
+];
+const CARD_ICONS: LucideIcon[] = [FlaskConical, BookOpen, ListChecks, FlaskConical, NotebookPen];
 
-function ProgressRing({ pct, stroke, track }: { pct: number; stroke: string; track: string }) {
-  const dash = (pct / 100) * RING_C;
-  return (
-    <div className="relative grid h-9 w-9 shrink-0 place-items-center">
-      <svg viewBox="0 0 36 36" className="h-9 w-9 -rotate-90">
-        <circle cx="18" cy="18" r={RING_R} fill="none" stroke={track} strokeWidth="3" />
-        <circle
-          cx="18"
-          cy="18"
-          r={RING_R}
-          fill="none"
-          stroke={stroke}
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeDasharray={`${dash} ${RING_C}`}
-          className="transition-[stroke-dasharray] duration-700"
-        />
-      </svg>
-      <span
-        className="font-mono-num absolute text-[9px] font-medium tabular-nums"
-        style={{ color: stroke }}
-      >
-        {pct}
-      </span>
-    </div>
-  );
-}
-
-function CourseCard({ course, span }: { course: Course; span?: "wide" }) {
-  const pct = Math.round((course.done / course.lessons) * 100);
-  const accent = accentFor(course.category);
-  const Icon = accent.icon;
+function CourseCard({ course, index, onOpen }: { course: Course; index: number; onOpen: () => void }) {
+  const style = CARD_STYLES[index % CARD_STYLES.length];
+  const Icon = CARD_ICONS[index % CARD_ICONS.length];
+  const pct = course.lessons ? Math.round((course.done / course.lessons) * 100) : 0;
+  const students = course.studentCount ?? 0;
+  const badge = course.real ? roleLabel(course.role ?? "student") : `${pct}%`;
+  const MetaIcon = course.real ? Users : ListChecks;
+  const meta = course.real
+    ? `${students} ${students === 1 ? "student" : "students"}${course.archived ? " · Archived" : ""}`
+    : `${course.done}/${course.lessons} lessons`;
 
   return (
-    <li className={`rise-in ${span === "wide" ? "col-span-2" : "col-span-1"}`}>
+    <li className="rise-in col-span-1">
       <button
-        className="group relative flex h-full w-full flex-col overflow-hidden rounded-[24px] p-4 text-left transition-transform active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-        style={{ backgroundColor: accent.card, color: accent.ink, ["--tw-ring-color" as string]: accent.card }}
+        onClick={onOpen}
+        className="group relative block aspect-[600/717] w-full text-left transition-transform active:scale-[0.97] focus-visible:outline-none"
+        style={{ color: style.ink }}
       >
-        <Icon
+        <img
+          src={style.bg}
+          alt=""
           aria-hidden
-          className="pointer-events-none absolute -right-3 -top-3 h-24 w-24 rotate-[-12deg] opacity-[0.14]"
-          strokeWidth={1.5}
+          draggable={false}
+          className="pointer-events-none absolute inset-0 h-full w-full select-none"
         />
-        <span className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-black/10 transition-colors group-hover:bg-black/15">
-          <ArrowUpRight className="h-4 w-4" strokeWidth={2.25} />
-        </span>
 
-        <p className="font-mono-num relative text-[0.62rem] font-medium tracking-[0.14em] uppercase opacity-70">
-          {course.category}
-        </p>
-        <h3 className="font-display relative mt-1.5 max-w-[85%] text-[0.95rem] leading-snug font-semibold">
-          {course.title}
-        </h3>
+        <div className="relative flex h-full flex-col p-3">
+          <div className="flex items-start justify-between gap-2">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl" style={{ backgroundColor: style.chip }}>
+              <Icon className="h-5 w-5" strokeWidth={1.75} />
+            </span>
+            <span
+              className="mt-0.5 max-w-[60%] truncate rounded-full px-2 py-0.5 text-[10px] font-bold"
+              style={{ backgroundColor: style.chip }}
+            >
+              {badge}
+            </span>
+          </div>
 
-        <div className="relative mt-auto flex items-end justify-between pt-4">
-          <span className="font-mono-num text-[0.7rem] font-medium tabular-nums opacity-70">
-            {course.done}/{course.lessons} lessons
-          </span>
-          <ProgressRing pct={pct} stroke={accent.ink} track={accent.track} />
+          <div className="mt-auto min-w-0 pr-1">
+            <h3 className="font-display line-clamp-3 text-[13.5px] leading-tight font-bold">{course.title}</h3>
+            <p className="mt-1.5 flex items-center gap-1 text-[11px] font-semibold">
+              <MetaIcon className="h-3 w-3 shrink-0" strokeWidth={2.25} />
+              <span className="truncate">{meta}</span>
+            </p>
+          </div>
         </div>
+
+        <span className="absolute right-[-2.2%] top-[47.7%] grid aspect-square w-[17.8%] -translate-y-1/2 place-items-center rounded-full bg-white shadow-sm transition-transform group-hover:scale-105">
+          <ArrowUpRight className="h-[48%] w-[48%]" strokeWidth={2.5} style={{ color: style.arrow }} />
+        </span>
       </button>
     </li>
   );
@@ -142,16 +154,52 @@ function CourseCard({ course, span }: { course: Course; span?: "wide" }) {
 
 function Index() {
   const [filter, setFilter] = useState(0);
+  const [search, setSearch] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const router = useRouter();
+  const { user } = useAuth();
+  const myClassesQuery = useMyClasses();
+  const realClasses = myClassesQuery.data ?? [];
+  const useRealClasses = !myClassesQuery.isPending && realClasses.length > 0;
+  const lastOpenedId = getLastOpenedClassId(user?.id);
+  const realCourses: Course[] = realClasses.map((course) => ({
+    id: course.id,
+    title: course.name,
+    category: course.department || course.courseCode,
+    lessons: 0,
+    done: 0,
+    color: course.color,
+    role: course.myRole,
+    studentCount: course.studentCount,
+    archived: course.archived,
+    real: true,
+  }));
+  const activeCourses = useRealClasses ? realCourses : courses;
 
-  const current = courses.find((c) => c.done < c.lessons) ?? courses[0];
+  const current = useRealClasses
+    ? realCourses.find((course) => course.id === lastOpenedId) ?? realCourses.find((course) => !course.archived) ?? realCourses[0]
+    : courses.find((c) => c.done < c.lessons) ?? courses[0];
 
-  const shown = courses.filter((c) =>
-    c !== current && (filter === 0 ? true : filter === 1 ? c.done < c.lessons : c.done === c.lessons),
+  const shown = activeCourses.filter((course) =>
+    course !== current &&
+    (useRealClasses
+      ? filter === 0 || (filter === 1 ? !course.archived : course.archived)
+      : filter === 0 ? true : filter === 1 ? course.done < course.lessons : course.done === course.lessons) &&
+    `${course.title} ${course.category}`.toLowerCase().includes(search.trim().toLowerCase()),
   );
 
   const currentPct = Math.round((current.done / current.lessons) * 100);
   const currentAccent = accentFor(current.category);
   const CurrentIcon = currentAccent.icon;
+
+  useEffect(() => {
+    const closeMenu = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeMenu);
+    return () => document.removeEventListener("mousedown", closeMenu);
+  }, []);
 
   const today = new Date().toLocaleDateString(undefined, {
     month: "long",
@@ -180,12 +228,21 @@ function Index() {
                 Courses
               </h1>
             </div>
+            <div ref={menuRef} className="relative">
             <button
               aria-label="Add a course"
+              onClick={() => setMenuOpen((open) => !open)}
               className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-black/10 text-[#0B0A0F] transition-colors hover:bg-black/5 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/20"
             >
               <Plus className="h-4 w-4" strokeWidth={2} />
             </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-12 z-20 w-40 rounded-2xl border border-black/10 bg-white p-1.5 shadow-lg">
+                <button onClick={() => router.navigate({ to: "/create" })} className="w-full rounded-xl px-3 py-2 text-left text-sm font-medium hover:bg-black/[0.03]">Create class</button>
+                <button onClick={() => router.navigate({ to: "/join" })} className="w-full rounded-xl px-3 py-2 text-left text-sm font-medium hover:bg-black/[0.03]">Join with code</button>
+              </div>
+            )}
+            </div>
           </div>
 
           <div className="mt-5 flex items-center gap-2 rounded-2xl border border-black/10 bg-black/[0.03] px-4 py-3 focus-within:border-black/20">
@@ -193,12 +250,14 @@ function Index() {
             <input
               type="search"
               placeholder="Search courses"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
               className="min-w-0 flex-1 bg-transparent text-sm text-[#0B0A0F] outline-none placeholder:text-black/40"
             />
           </div>
         </header>
 
-     <section className="px-6 pt-7">
+     {!myClassesQuery.isPending && current && <section className="px-6 pt-7">
   <h2 className="font-mono-num text-[10px] font-medium tracking-[0.2em] text-black/40 uppercase">
     Continue learning
   </h2>
@@ -215,24 +274,26 @@ function Index() {
     <div className="mt-3 flex gap-3">
       <div className="w-[3px] shrink-0 rounded-full bg-[#7C6FEE]/25" />
       <p className="text-[0.8rem] leading-relaxed text-[#211D45]/55">
-        {current.category} &middot; Lesson {current.done + 1} of {current.lessons}.
-        You&rsquo;re {currentPct}% of the way through.
+      {current.real
+        ? `${current.category} · ${roleLabel(current.role ?? "student")} · ${current.studentCount ?? 0} students`
+        : <>{current.category} &middot; Lesson {current.done + 1} of {current.lessons}. You&rsquo;re {currentPct}% of the way through.</>}
       </p>
     </div>
 
-    <div className="mt-6 h-1 w-full overflow-hidden rounded-full bg-[#211D45]/[0.06]">
+    {!current.real && <div className="mt-6 h-1 w-full overflow-hidden rounded-full bg-[#211D45]/[0.06]">
       <div
         className="h-full rounded-full bg-[#7C6FEE] transition-[width] duration-700"
         style={{ width: `${currentPct}%` }}
       />
-    </div>
+    </div>}
 
-    <button className="mt-6 flex w-full items-center justify-center gap-1.5 rounded-full bg-[#EEEBFC] px-5 py-3 text-sm font-semibold text-[#4C3FCC] transition-colors hover:bg-[#E3DEFB] active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#7C6FEE]">
+    <button onClick={() => current.id && router.navigate({ to: "/class", search: { classId: current.id } })} className="mt-6 flex w-full items-center justify-center gap-1.5 rounded-full bg-[#EEEBFC] px-5 py-3 text-sm font-semibold text-[#4C3FCC] transition-colors hover:bg-[#E3DEFB] active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#7C6FEE]">
       Resume
       <ArrowUpRight className="h-4 w-4" strokeWidth={2.25} />
     </button>
   </article>
-</section>
+</section>}
+        {myClassesQuery.isPending && <div className="mx-6 mt-7 h-64 animate-pulse rounded-[28px] bg-black/[0.05]" />}
         <div className="no-scrollbar mt-7 flex gap-2 overflow-x-auto px-6">
           {filters.map((f, i) => (
             <button
@@ -252,24 +313,42 @@ function Index() {
    
 
         <div className="flex-1 px-6 pt-5 pb-28">
-          {shown.length > 0 ? (
+          {myClassesQuery.isError ? (
+            <div className="rounded-[24px] border border-dashed border-black/10 px-5 py-10 text-center">
+              <p className="text-xs text-black/45">We couldn't load your classes.</p>
+              <button onClick={() => void myClassesQuery.refetch()} className="mt-3 text-sm font-semibold">Try again</button>
+            </div>
+          ) : myClassesQuery.isPending ? (
+            <ul className="grid grid-cols-2 gap-3 animate-pulse"><li className="h-44 rounded-[24px] bg-black/[0.05]" /><li className="h-44 rounded-[24px] bg-black/[0.05]" /></ul>
+          ) : shown.length > 0 ? (
             <ul className="grid grid-cols-2 gap-3">
               {shown.map((course, i) => (
                 <CourseCard
                   key={course.title}
                   course={course}
-                  span={i === shown.length - 1 ? "wide" : undefined}
+                  index={i}
+                  onOpen={() => course.id && router.navigate({ to: "/class", search: { classId: course.id } })}
                 />
               ))}
             </ul>
           ) : (
-            <div className="rounded-[24px] border border-dashed border-black/10 px-5 py-10 text-center">
-              <p className="font-display text-sm font-semibold">Nothing here yet</p>
+            <div className="flex flex-col items-center px-5 py-6 text-center">
+              <img
+                src={noCourses}
+                alt="A red panda detective with a magnifying glass sitting on a stack of books"
+                width={640}
+                height={475}
+                draggable={false}
+                className="w-60 max-w-full select-none"
+              />
+              <p className="font-display mt-4 text-[15px] font-bold">Nothing here yet</p>
               <p className="mt-1 text-xs text-black/45">
-                Courses matching this filter will show up here.
+                {useRealClasses ? "Classes matching this filter will show up here." : "Courses matching this filter will show up here."}
               </p>
+              {!useRealClasses && <div className="mt-4 flex justify-center gap-3 text-sm font-semibold"><button onClick={() => router.navigate({ to: "/create" })}>Create class</button><button onClick={() => router.navigate({ to: "/join" })}>Join with code</button></div>}
             </div>
           )}
+          {!useRealClasses && <div className="mt-4 flex justify-center gap-3 text-sm font-semibold text-black/45"><button onClick={() => router.navigate({ to: "/create" })}>Create class</button><button onClick={() => router.navigate({ to: "/join" })}>Join with code</button></div>}
         </div>
       </div>
     </main>

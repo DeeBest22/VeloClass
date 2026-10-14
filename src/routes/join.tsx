@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useRouter, createFileRoute } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, Check } from "lucide-react";
+import { toast } from "sonner";
+import { joinClass } from "@/lib/classes";
 
 // ── Design tokens ────────────────────────────────────────────────────────
 // Shared with CreateClass — same paper-white surface, warm-charcoal ink,
@@ -22,24 +24,6 @@ const tokens = {
 const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const GROUP_LEN = 4;
 
-const chalkColors = ["#6C63FF", "#2E8B74", "#E0A63A", "#D9707A", "#4C8BF5", "#6B7A8F"];
-const mockClasses = [
-  "Organic Chemistry II",
-  "Design Studio",
-  "World Geography",
-  "Intro to Statistics",
-  "Studio Art I",
-  "Modern Poetry",
-];
-
-// Deterministic "lookup" so the same code always resolves to the same class —
-// stands in for a real API call.
-function hashCode(str) {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
-  return h;
-}
-
 function JoinClass() {
   const router = useRouter();
   const goBack = () => router.history.back();
@@ -47,6 +31,8 @@ function JoinClass() {
   const [step, setStep] = useState("entry"); // 'entry' | 'success'
   const [chars, setChars] = useState(Array(GROUP_LEN * 2).fill(""));
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [joinedClass, setJoinedClass] = useState({ id: "", name: "", color: "" });
   const inputsRef = useRef([]);
 
   const code = chars.join("");
@@ -67,6 +53,7 @@ function JoinClass() {
   const handleChange = (i, raw) => {
     const val = raw.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(-1);
     if (val && !CODE_CHARS.includes(val)) return;
+    setError("");
     setCharAt(i, val);
     if (val && i < chars.length - 1) inputsRef.current[i + 1]?.focus();
   };
@@ -91,6 +78,7 @@ function JoinClass() {
       .slice(0, chars.length)
       .split("");
     if (pasted.length === 0) return;
+    setError("");
     setChars((prev) => {
       const next = [...prev];
       pasted.forEach((c, idx) => {
@@ -101,24 +89,29 @@ function JoinClass() {
     inputsRef.current[Math.min(pasted.length, chars.length - 1)]?.focus();
   };
 
-  const handleJoin = () => {
+  const handleJoin = async () => {
     if (!complete || loading) return;
     setLoading(true);
-    window.setTimeout(() => {
+    setError("");
+    try {
+      const result = await joinClass(code);
+      setJoinedClass(result);
       setLoading(false);
       setStep("success");
-    }, 700);
+      if (result.alreadyMember) toast("You're already in this class");
+    } catch (joinError) {
+      setLoading(false);
+      setError(joinError instanceof Error ? joinError.message : "We couldn't join this class. Please try again.");
+    }
   };
 
   const retry = () => {
     setStep("entry");
     setChars(Array(GROUP_LEN * 2).fill(""));
     setLoading(false);
+    setError("");
+    setJoinedClass({ id: "", name: "", color: "" });
   };
-
-  const h = hashCode(code);
-  const matchedName = mockClasses[h % mockClasses.length];
-  const matchedColor = chalkColors[h % chalkColors.length];
 
   return (
     <div
@@ -272,6 +265,11 @@ function JoinClass() {
             <p className="text-center text-xs mb-10" style={{ color: tokens.inkFaint }}>
               Codes use letters and numbers only - no 0, O, 1 or I.
             </p>
+            {error && (
+              <p className="text-center text-xs -mt-7 mb-7" style={{ color: tokens.error }}>
+                {error}
+              </p>
+            )}
 
             <button
               onClick={handleJoin}
@@ -292,7 +290,7 @@ function JoinClass() {
             <div className="flex-1 flex flex-col items-center justify-center text-center">
               <div
                 className="w-14 h-14 rounded-2xl flex items-center justify-center mb-6 jc-pop-in"
-                style={{ background: matchedColor }}
+                style={{ background: joinedClass.color }}
               >
                 <Check className="w-6 h-6" style={{ color: "#FFFFFF" }} />
               </div>
@@ -305,7 +303,7 @@ function JoinClass() {
               </p>
 
               <h1 className="jc-display text-2xl mb-1 px-4 jc-fade-in-delay" style={{ fontWeight: 500 }}>
-                {matchedName}
+                {joinedClass.name}
               </h1>
 
               <div className="relative jc-fade-in-delay mb-2">
@@ -316,7 +314,7 @@ function JoinClass() {
                   <path
                     d="M4 6 C 24 9, 50 2, 62 6 S 100 9, 116 4"
                     fill="none"
-                    stroke={matchedColor}
+                    stroke={joinedClass.color}
                     strokeWidth="2"
                     strokeLinecap="round"
                     strokeDasharray="140"
@@ -327,9 +325,7 @@ function JoinClass() {
             </div>
 
             <button
-              onClick={() => {
-                /* dummy — real navigation to the class page not wired up yet */
-              }}
+              onClick={() => router.navigate({ to: "/class", search: { classId: joinedClass.id } })}
               className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl text-sm font-semibold transition-all active:scale-95 mt-6"
               style={{ background: tokens.accent, color: "#FFFFFF" }}
             >

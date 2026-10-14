@@ -15,6 +15,8 @@ import {
   Users
 } from "lucide-react";
 import pfpImage from "@/assets/pfp.png";
+import { useAuth, profileFromUser } from "@/lib/auth";
+import { roleLabel, useMyClasses } from "@/lib/classes";
 import FloatingCallButton from '@/components/FloatingActionButton'
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -153,6 +155,14 @@ function EmptyState({ title, meta }: { title: string; meta: string }) {
 }
 
 function HomePage() {
+  const { user } = useAuth();
+  const profile = profileFromUser(user);
+  const myClassesQuery = useMyClasses();
+  const realClasses = myClassesQuery.data ?? [];
+  const visibleClasses = realClasses.filter((course) => !course.archived).slice(0, 3);
+  const enrolledCount = realClasses.filter((course) => course.myRole === "student").length;
+  const teachingCount = realClasses.filter((course) => course.myRole === "teacher").length;
+  const showDummyCourses = !myClassesQuery.isPending && realClasses.length === 0;
   return (
     <div
       className="min-h-screen w-full"
@@ -176,7 +186,7 @@ function HomePage() {
         style={{ borderColor: "rgba(0,0,0,0.12)" }}
       >
         <img
-          src={pfpImage}
+          src={profile.avatarUrl ?? pfpImage}
           alt="Profile picture"
           className="h-full w-full object-cover"
         />
@@ -194,7 +204,7 @@ function HomePage() {
         Good evening
       </p>
       <p className="text-[22px] font-bold leading-tight" style={{ color: INK }}>
-        Amara
+        {profile.firstName}
       </p>
     </div>
   </div>
@@ -219,25 +229,33 @@ function HomePage() {
               All courses
             </Link>
           </div>
-          {courses.length === 0 ? (
+          {myClassesQuery.isPending ? (
+            <div className="mt-4 grid grid-cols-2 gap-3 animate-pulse">
+              {[0, 1, 2, 3].map((item) => <div key={item} className="h-[168px] rounded-[1.5rem] bg-black/[0.06]" />)}
+            </div>
+          ) : !showDummyCourses && visibleClasses.length === 0 ? (
             <div className="mt-4">
               <EmptyState title="No courses yet" meta="Enrolled courses will show up here" />
             </div>
           ) : (
           <div className="mt-4 grid grid-cols-2 gap-3">
-            {courses.map((c) => (
+            {(showDummyCourses ? courses : visibleClasses).map((c, i) => {
+              const realCourse = "id" in c;
+              const tint = realCourse ? courses[i % courses.length] : null;
+              return (
               <Link
-                to={c.title === "Organic Chemistry II" ? "/live-class" : "/"}
+                to={realCourse ? "/class" : c.title === "Organic Chemistry II" ? "/live-class" : "/"}
+                search={realCourse ? { classId: c.id } : undefined}
                 key={c.title}
                 className="flex h-[168px] flex-col justify-between rounded-[1.5rem] p-4 transition-transform hover:-translate-y-0.5"
-                style={{ backgroundColor: c.bg }}
+                style={{ backgroundColor: realCourse ? tint?.bg : c.bg }}
               >
                 <div className="flex items-start justify-between">
                   <span
                     className="text-[10px] font-bold uppercase tracking-[0.14em]"
-                    style={{ color: c.accent }}
+                    style={{ color: realCourse ? tint?.accent : c.accent }}
                   >
-                    {c.eyebrow}
+                    {realCourse ? c.department || c.courseCode : c.eyebrow}
                   </span>
                   <div
                     className="grid h-6 w-6 place-items-center rounded-full"
@@ -251,14 +269,15 @@ function HomePage() {
                 </p>
                 <div className="flex items-end justify-between">
                   <span className="text-[11px] font-medium" style={{ color: "rgba(0,0,0,0.55)" }}>
-                    {c.progressLabel}
+                    {realCourse ? roleLabel(c.myRole) : c.progressLabel}
                   </span>
-                  <ProgressRing percent={c.percent} color={c.accent} />
+                  {!realCourse && <ProgressRing percent={c.percent} color={c.accent} />}
                 </div>
               </Link>
-            ))}
+            );
+            })}
             <Link
-              to="/"
+              to={showDummyCourses ? "/" : "/courses"}
               className="flex h-[168px] flex-col items-start justify-between rounded-[1.5rem] p-4 transition-colors hover:bg-black/[0.02]"
               style={{ backgroundColor: "white", border: "1px solid rgba(0,0,0,0.06)" }}
             >
@@ -278,14 +297,20 @@ function HomePage() {
               </div>
               <div>
                 <p className="text-[15px] font-bold leading-snug" style={{ color: INK }}>
-                  6 enrolled
+                  {showDummyCourses ? "6 enrolled" : `${enrolledCount} enrolled`}
                 </p>
                 <p className="mt-0.5 text-[11.5px]" style={{ color: INK_SOFT }}>
-                  2 teaching · see all
+                  {showDummyCourses ? "2 teaching · see all" : `${teachingCount} teaching · see all`}
                 </p>
               </div>
             </Link>
           </div>
+          )}
+          {showDummyCourses && (
+            <div className="mt-3 flex gap-3 text-xs font-medium" style={{ color: INK_SOFT }}>
+              <Link to="/create">Create a class</Link>
+              <Link to="/join">Join a class</Link>
+            </div>
           )}
         </section>
 

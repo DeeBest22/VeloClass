@@ -3,20 +3,72 @@ import {
   Outlet,
   Link,
   createRootRouteWithContext,
+  useNavigate,
   useRouter,
   useRouterState,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { Toaster } from "sonner";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { useSystemBars } from "../lib/system-bars";
 import BottomNav from "../components/bottom-nav";
+import { AuthProvider, useAuth, needsOnboarding } from "../lib/auth";
 
 // Only these routes show the bottom nav. Keep in sync with the `tabs` array in bottom-nav.tsx.
 const TAB_PATHS = ["/", "/courses", "/chat", "/profile"];
+
+// Pages a signed-out person may open (lowercase). Everything else requires a session.
+const AUTH_SCREENS = ["/welcome", "/auth", "/authmethods", "/emailauth"];
+const PUBLIC_PATHS = [...AUTH_SCREENS, "/reset-password"];
+
+const normalize = (path: string) => path.replace(/\/+$/, "").toLowerCase() || "/";
+
+function Splash() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background">
+      <span
+        className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent"
+        role="status"
+        aria-label="Loading"
+      />
+    </div>
+  );
+}
+
+/**
+ * Client-side route guard.
+ * - signed out + private page  -> /Welcome
+ * - signed in, not onboarded -> /onboarding
+ * - signed in  + welcome/login -> /
+ * The session lives in browser storage, so the server render always shows the splash.
+ */
+function AuthGate({ children }: { children: ReactNode }) {
+  const { session, user, loading } = useAuth();
+  const navigate = useNavigate();
+  const pathname = normalize(useRouterState({ select: (s) => s.location.pathname }));
+
+  const isPublic = PUBLIC_PATHS.includes(pathname);
+  const isAuthScreen = AUTH_SCREENS.includes(pathname);
+  const mustLogIn = !session && !isPublic;
+  // New accounts see the onboarding slides once, before anything else.
+  const mustOnboard =
+    !!user && pathname !== "/onboarding" && pathname !== "/reset-password" && needsOnboarding(user);
+  const alreadyIn = !!session && isAuthScreen;
+
+  useEffect(() => {
+    if (loading) return;
+    if (mustLogIn) navigate({ to: "/Welcome", replace: true });
+    else if (mustOnboard) navigate({ to: "/onboarding", replace: true });
+    else if (alreadyIn) navigate({ to: "/", replace: true });
+  }, [loading, mustLogIn, mustOnboard, alreadyIn, navigate]);
+
+  if (loading || mustLogIn || mustOnboard || alreadyIn) return <Splash />;
+  return <>{children}</>;
+}
 
 function NotFoundComponent() {
   return (
@@ -135,13 +187,18 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
-      {/* Mounted once here (not per-page) so layoutId keeps the same instance while
-          navigating between tab pages, letting the active-tab indicator slide instead
-          of resetting. It unmounts on non-tab pages, which is fine since there's no
-          indicator animation to preserve when it's not visible. */}
-      {showBottomNav && <BottomNav />}
+      <AuthProvider>
+        <AuthGate>
+          {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+          <Outlet />
+          {/* Mounted once here (not per-page) so layoutId keeps the same instance while
+              navigating between tab pages, letting the active-tab indicator slide instead
+              of resetting. It unmounts on non-tab pages, which is fine since there's no
+              indicator animation to preserve when it's not visible. */}
+          {showBottomNav && <BottomNav />}
+        </AuthGate>
+        <Toaster position="top-center" />
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

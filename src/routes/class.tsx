@@ -1,4 +1,7 @@
+import { useEffect, useRef, useState } from "react";
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { Copy } from "lucide-react";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   MoreHorizontal,
@@ -13,12 +16,35 @@ import {
   Paperclip,
   FlaskConical,
   Check,
+  Pencil,
+  RefreshCw,
+  Archive,
+  ArchiveRestore,
+  Trash2,
+  LogOut,
 } from "lucide-react";
 
 import banner from "@/assets/chemistry-banner.jpg";
+import noClasswork from "@/assets/no-classwork.png";
 import ClassSections from "@/components/class-sections";
+import { useAuth } from "@/lib/auth";
+import {
+  formatSchedule,
+  getLastOpenedClassId,
+  isClassId,
+  setLastOpenedClassId,
+  useClassOverview,
+  deleteClass,
+  leaveClass,
+  regenerateJoinCode,
+  setClassArchived,
+} from "@/lib/classes";
 
 export const Route = createFileRoute("/class")({
+  validateSearch: (search: Record<string, unknown>): { classId?: string } => {
+    const classId = search["classId"];
+    return typeof classId === "string" ? { classId } : {};
+  },
   head: () => ({
     meta: [
       { title: "Chemistry Class Hub | Virtual Classroom" },
@@ -79,16 +105,129 @@ const feed = [
   },
 ];
 
-const classwork = [
-  { day: "9", month: "Sep", title: "Periodic trends reading response", meta: "Reading · 10 pts", status: "done" as const },
-  { day: "12", month: "Sep", title: "Ionic bonding worksheet", meta: "Worksheet · 20 pts", status: "due" as const, due: "Due Fri" },
-  { day: "15", month: "Sep", title: "Titration lab report", meta: "Lab report · 50 pts", status: "upcoming" as const, due: "Next week" },
-  { day: "9", month: "Dec", title: "Unit 3 quiz", meta: "Quiz · 30 pts", status: "upcoming" as const, due: "9 Dec" },
-];
+type ClassworkItem = {
+  day: string;
+  month: string;
+  title: string;
+  meta: string;
+  status: "done" | "due" | "upcoming";
+  due?: string;
+};
+
+const classwork: ClassworkItem[] = [];
+
+function ClassState({
+  title,
+  message,
+  children,
+}: {
+  title: string;
+  message: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="min-h-screen bg-background px-4 pt-12">
+      <div className="card-soft mx-auto max-w-md rounded-tile p-6 text-center">
+        <h1 className="text-lg font-bold text-slate-900">{title}</h1>
+        <p className="mt-2 text-sm text-slate-400">{message}</p>
+        <div className="mt-5 flex flex-wrap justify-center gap-2">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function ClassLoading() {
+  return (
+    <div className="min-h-screen bg-background px-4 pt-5">
+      <div className="card-soft mx-auto max-w-md overflow-hidden rounded-tile animate-pulse">
+        <div className="h-40 w-full bg-slate-200" />
+        <div className="space-y-3 p-4">
+          <div className="h-5 w-2/3 rounded bg-slate-200" />
+          <div className="h-4 w-1/2 rounded bg-slate-100" />
+          <div className="h-8 w-full rounded-full bg-slate-100" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MenuItem({
+  icon: Icon,
+  label,
+  hint,
+  danger,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  hint?: string;
+  danger?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      role="menuitem"
+      onClick={onClick}
+      className={`flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-[13.5px] font-semibold transition-all active:scale-[0.98] ${
+        danger ? "text-red-400 hover:bg-red-500/15" : "text-slate-100 hover:bg-white/10"
+      }`}
+    >
+      <span
+        className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${
+          danger ? "bg-red-500/15" : "bg-white/10"
+        }`}
+      >
+        <Icon className="h-4 w-4" />
+      </span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {hint && <span className="shrink-0 pr-1 font-mono text-[11px] font-medium tracking-wider text-slate-400">{hint}</span>}
+    </button>
+  );
+}
 
 function ClassHome() {
   const router = useRouter();
+  const { user } = useAuth();
+  const { classId: searchedClassId } = Route.useSearch();
+  const classId = searchedClassId ?? getLastOpenedClassId(user?.id);
+  const overviewQuery = useClassOverview(classId);
+  const overview = overviewQuery.data;
   const doneCount = classwork.filter((i) => i.status === "done").length;
+  const schedule = overview ? formatSchedule(overview.scheduleDays, overview.scheduleTime) : null;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuEverOpened, setMenuEverOpened] = useState(false);
+  useEffect(() => { if (menuOpen) setMenuEverOpened(true); }, [menuOpen]);
+  const [confirm, setConfirm] = useState<"regenerate" | "archive" | "delete" | "leave" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (overview && user) setLastOpenedClassId(user.id, overview.id);
+  }, [overview, user]);
+  useEffect(() => {
+    const close = (event: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(event.target as Node)) setMenuOpen(false); };
+    document.addEventListener("mousedown", close); return () => document.removeEventListener("mousedown", close);
+  }, []);
+
+  if (!classId) {
+    return (
+      <ClassState title="No class selected" message="Create a class or join one to get started.">
+        <Link to="/create" className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">Create class</Link>
+        <Link to="/join" className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600">Join class</Link>
+      </ClassState>
+    );
+  }
+
+  if (!isClassId(classId) || overviewQuery.isError || overview === null) {
+    return (
+      <ClassState title="Class not found" message="This class does not exist or you don't have access.">
+        <button onClick={() => router.history.back()} className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600">Go back</button>
+        <Link to="/join" className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">Join a class</Link>
+      </ClassState>
+    );
+  }
+
+  if (overviewQuery.isPending || !overview) return <ClassLoading />;
 
   return (
     <div className="min-h-screen bg-background">
@@ -103,6 +242,52 @@ function ClassHome() {
             >
               <ArrowLeft className="h-[18px] w-[18px]" />
             </button>
+            <div ref={menuRef} className="relative col-start-3 justify-self-end">
+              <button
+                onClick={() => setMenuOpen((open) => !open)}
+                aria-label="Class options"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                className={`grid h-10 w-10 place-items-center rounded-full bg-card text-foreground shadow-[var(--shadow-card)] transition-all active:scale-95 ${
+                  menuOpen ? "ring-2 ring-slate-300" : ""
+                }`}
+              >
+                <MoreHorizontal className="h-[18px] w-[18px]" />
+              </button>
+              <style>{"@keyframes menuIn{0%{opacity:0;transform:translateY(-10px) scale(.96)}60%{opacity:1;transform:translateY(2px) scale(1.01)}100%{opacity:1;transform:translateY(0) scale(1)}}@keyframes menuOut{0%{visibility:visible;opacity:1;transform:translateY(0) scale(1)}100%{visibility:hidden;opacity:0;transform:translateY(-8px) scale(.96)}}"}</style>
+              <div
+                role="menu"
+                onClick={() => setMenuOpen(false)}
+                aria-hidden={!menuOpen}
+                className={`absolute right-0 top-12 z-20 w-60 origin-top-right overflow-hidden rounded-xl border border-white/10 bg-slate-900/85 p-1.5 text-white shadow-[0_18px_44px_-10px_rgba(0,0,0,0.55)] backdrop-blur-xl ${
+                  menuOpen ? "visible animate-[menuIn_280ms_cubic-bezier(0.22,1,0.36,1)_both]" : menuEverOpened ? "pointer-events-none invisible animate-[menuOut_200ms_cubic-bezier(0.4,0,1,1)_both]" : "pointer-events-none invisible"
+                }`}
+              >
+                {overview.myRole === "teacher" ? (
+                  <>
+                    <MenuItem icon={Pencil} label="Edit class" onClick={() => router.navigate({ to: "/create", search: { classId: overview.id } })} />
+                    <MenuItem icon={Users} label="Members" onClick={() => router.navigate({ to: "/members", search: { classId: overview.id } })} />
+                    <div className="mx-2 my-1.5 h-px bg-white/10" />
+                    <MenuItem
+                      icon={Copy}
+                      label="Copy join code"
+                      hint={overview.joinCode ? `${overview.joinCode.slice(0, 4)}-${overview.joinCode.slice(4)}` : undefined}
+                      onClick={() => void navigator.clipboard.writeText(overview.joinCode ?? "").then(() => toast.success("Join code copied"), () => toast.error("Couldn't copy join code"))}
+                    />
+                    <MenuItem icon={RefreshCw} label="Regenerate join code" onClick={() => setConfirm("regenerate")} />
+                    <MenuItem icon={overview.archived ? ArchiveRestore : Archive} label={overview.archived ? "Unarchive class" : "Archive class"} onClick={() => setConfirm("archive")} />
+                    <div className="mx-2 my-1.5 h-px bg-white/10" />
+                    <MenuItem icon={Trash2} label="Delete class" danger onClick={() => setConfirm("delete")} />
+                  </>
+                ) : (
+                  <>
+                    <MenuItem icon={Users} label="Members" onClick={() => router.navigate({ to: "/members", search: { classId: overview.id } })} />
+                    <div className="mx-2 my-1.5 h-px bg-white/10" />
+                    <MenuItem icon={LogOut} label="Leave class" danger onClick={() => setConfirm("leave")} />
+                  </>
+                )}
+              </div>
+            </div>
           </header>
 
           {/* Class card — banner + meta */}
@@ -115,17 +300,34 @@ function ClassHome() {
               className="h-40 w-full object-cover"
             />
             <div className="px-4 pb-4 pt-3.5">
-              <h1 className="text-[19px] font-extrabold tracking-[-0.01em]">Chemistry Subject</h1>
-              <p className="mt-1 text-[13.5px] text-muted-foreground">Mr. Pandu Baskara, S.Sc</p>
+              <h1 className="text-[19px] font-extrabold tracking-[-0.01em]">{overview.name}</h1>
+              <p className="mt-1 text-[13.5px] text-muted-foreground">{overview.teacherName}</p>
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-course-blue/10 px-3 py-1.5 text-[11.5px] font-semibold text-foreground/80">
-                  <CalendarDays className="h-3.5 w-3.5 shrink-0" />
-                  Tue &amp; Thu · 10:45–12:15 PM
-                </span>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-course-yellow/25 px-3 py-1.5 text-[11.5px] font-semibold text-foreground/80">
+                {schedule && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-course-blue/10 px-3 py-1.5 text-[11.5px] font-semibold text-foreground/80">
+                    <CalendarDays className="h-3.5 w-3.5 shrink-0" />
+                    {schedule}
+                  </span>
+                )}
+                <button onClick={() => router.navigate({ to: "/members", search: { classId: overview.id } })} className="inline-flex items-center gap-1.5 rounded-full bg-course-yellow/25 px-3 py-1.5 text-[11.5px] font-semibold text-foreground/80">
                   <Users className="h-3.5 w-3.5 shrink-0" />
-                  20 Students
-                </span>
+                  {overview.studentCount} {overview.studentCount === 1 ? "Student" : "Students"}
+                </button>
+                {overview.myRole === "teacher" && overview.joinCode && (
+                  <button
+                    onClick={() => {
+                      void navigator.clipboard.writeText(overview.joinCode).then(
+                        () => toast.success("Join code copied"),
+                        () => toast.error("Couldn't copy join code"),
+                      );
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-course-blue/10 px-3 py-1.5 text-[11.5px] font-semibold text-foreground/80"
+                  >
+                    <Copy className="h-3.5 w-3.5 shrink-0" />
+                    {overview.joinCode.slice(0, 4)}-{overview.joinCode.slice(4)}
+                  </button>
+                )}
+                {overview.archived && <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-[11.5px] font-semibold text-foreground/80">Archived</span>}
               </div>
             </div>
           </section>
@@ -151,11 +353,27 @@ function ClassHome() {
             <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
               <div
                 className="h-full rounded-full bg-emerald-500 transition-all duration-500"
-                style={{ width: `${(doneCount / classwork.length) * 100}%` }}
+                style={{ width: `${classwork.length ? (doneCount / classwork.length) * 100 : 0}%` }}
               />
             </div>
 
             <div className="mt-4">
+              {classwork.length === 0 && (
+                <div className="flex flex-col items-center px-4 pb-2 pt-4 text-center">
+                  <img
+                    src={noClasswork}
+                    alt="A sleepy red panda curled up on a cushion next to a cup of tea and a stack of books"
+                    width={640}
+                    height={479}
+                    className="w-56 max-w-full select-none"
+                    draggable={false}
+                  />
+                  <h3 className="mt-4 text-[15px] font-bold text-slate-900">No class work yet</h3>
+                  <p className="mt-1 text-[12.5px] text-slate-400">
+                    Assignments and tests will show up here once they're posted.
+                  </p>
+                </div>
+              )}
               {classwork.map((item, i) => {
                 const isLast = i === classwork.length - 1;
                 return (
@@ -232,6 +450,7 @@ function ClassHome() {
           </div>
         </div>
       </div>
+      {confirm && <div className="fixed inset-0 z-30 grid place-items-center bg-black/30 p-4"><div className="w-full max-w-sm rounded-3xl border border-black/10 bg-white p-5"><h2 className="text-base font-bold">{confirm === "delete" ? "Delete class?" : confirm === "leave" ? "Leave class?" : confirm === "regenerate" ? "Regenerate join code?" : overview.archived ? "Unarchive class?" : "Archive class?"}</h2><p className="mt-2 text-sm text-slate-500">{confirm === "regenerate" ? "The old code will stop working immediately." : confirm === "archive" ? "Nobody new can join while this class is archived." : "This action can affect access to this class."}</p><div className="mt-5 flex justify-end gap-2"><button disabled={busy} onClick={() => setConfirm(null)} className="rounded-full border border-black/10 px-4 py-2 text-sm">Cancel</button><button disabled={busy} onClick={() => void (async () => { setBusy(true); try { if (confirm === "regenerate") { await regenerateJoinCode(overview.id); toast.success("Join code regenerated"); } else if (confirm === "archive") { await setClassArchived(overview.id, !overview.archived); toast.success(overview.archived ? "Class unarchived" : "Class archived"); } else if (confirm === "delete") { await deleteClass(overview.id); router.navigate({ to: "/courses" }); } else { await leaveClass(overview.id); router.navigate({ to: "/courses" }); } setConfirm(null); } catch (error) { toast.error(error instanceof Error ? error.message : "Something went wrong"); } finally { setBusy(false); } })()} className="rounded-full bg-primary px-4 py-2 text-sm text-primary-foreground">{busy ? "Working…" : "Confirm"}</button></div></div></div>}
     </div>
   );
 }

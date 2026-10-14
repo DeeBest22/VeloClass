@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, MailCheck } from "lucide-react";
 import { BackButton } from "@/components/BackButton";
+import { useAuth } from "@/lib/auth";
 
 type Mode = "signup" | "login";
 
@@ -19,7 +20,7 @@ function AppleMark() {
 
 export const Route = createFileRoute("/EmailAuth")({
   validateSearch: (search: Record<string, unknown>): { mode: Mode } => ({
-    mode: search.mode === "login" ? "login" : "signup",
+    mode: search["mode"] === "login" ? "login" : "signup",
   }),
   head: () => ({
     meta: [
@@ -33,29 +34,151 @@ export const Route = createFileRoute("/EmailAuth")({
 function EmailAuthPage() {
   const { mode } = Route.useSearch();
   const navigate = useNavigate();
+  const { signUp, signIn, resetPassword, resendConfirmation } = useAuth();
   const isSignup = mode === "signup";
+
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [touched, setTouched] = useState({ email: false, password: false });
+  const [touched, setTouched] = useState({ name: false, email: false, password: false });
   const [submitting, setSubmitting] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  // Set after sign up when the project requires the email to be confirmed first.
+  const [confirmEmail, setConfirmEmail] = useState<string | null>(null);
 
-  const emailValid = /^\S+@\S+\.\S+$/.test(email);
-  const passwordValid = password.length >= 8;
-  const canSubmit = emailValid && passwordValid && !submitting;
+  // Switching between "Log in" and "Create an account" keeps this component mounted.
+  useEffect(() => {
+    setError(null);
+    setNotice(null);
+    setConfirmEmail(null);
+    setPassword("");
+    setTouched({ name: false, email: false, password: false });
+  }, [mode]);
+
+  const nameValid = fullName.trim().length >= 2;
+  const emailValid = /^\S+@\S+\.\S+$/.test(email.trim());
+  const passwordValid = isSignup ? password.length >= 8 : password.length > 0;
+  const canSubmit = (!isSignup || nameValid) && emailValid && passwordValid && !submitting;
   const title = isSignup ? "Create your account" : "Welcome back";
   const body = isSignup ? "Create an account with your email." : "Log in with your email to continue.";
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setTouched({ email: true, password: true });
+    setError(null);
+    setNotice(null);
+    setTouched({ name: true, email: true, password: true });
     if (!canSubmit) return;
 
     setSubmitting(true);
-    // Replace with the real email authentication request when it is available.
-    await new Promise((resolve) => setTimeout(resolve, 650));
-    navigate({ to: "/" });
+    const cleanEmail = email.trim();
+
+    if (isSignup) {
+      const res = await signUp({ email: cleanEmail, password, fullName: fullName.trim() });
+      setSubmitting(false);
+      if (res.error) return setError(res.error);
+      if (res.needsConfirmation) return setConfirmEmail(cleanEmail);
+      navigate({ to: "/onboarding", replace: true });
+      return;
+    }
+
+    const res = await signIn({ email: cleanEmail, password });
+    setSubmitting(false);
+    if (res.error) return setError(res.error);
+    navigate({ to: "/", replace: true });
   };
+
+  const onForgotPassword = async () => {
+    setError(null);
+    setNotice(null);
+    setTouched((value) => ({ ...value, email: true }));
+    if (!emailValid) {
+      setError("Enter your email address above, then tap Forgot password.");
+      return;
+    }
+    setResetting(true);
+    const res = await resetPassword(email.trim());
+    setResetting(false);
+    if (res.error) return setError(res.error);
+    setNotice(`If an account exists for ${email.trim()}, we've sent a link to reset your password.`);
+  };
+
+  const onResend = async () => {
+    if (!confirmEmail) return;
+    setError(null);
+    setNotice(null);
+    setResending(true);
+    const res = await resendConfirmation(confirmEmail);
+    setResending(false);
+    if (res.error) setError(res.error);
+    else setNotice("Confirmation email sent again.");
+  };
+
+  if (confirmEmail) {
+    return (
+      <main className="flex min-h-screen flex-col bg-background px-6">
+        <div className="flex h-16 items-center">
+          <BackButton />
+        </div>
+        <div className="mx-auto flex w-full max-w-sm flex-1 flex-col pt-16 sm:pt-20">
+          <section className="rise-in">
+            <span className="mb-6 grid h-14 w-14 place-items-center rounded-2xl bg-primary/10 text-primary">
+              <MailCheck className="h-7 w-7" strokeWidth={1.8} />
+            </span>
+            <h1 className="text-[32px] font-bold leading-[1.1] tracking-[-0.045em] text-foreground">
+              Check your email
+            </h1>
+            <p className="mt-3 text-[14px] leading-relaxed text-muted-foreground">
+              We sent a confirmation link to{" "}
+              <span className="font-semibold text-foreground">{confirmEmail}</span>. Open it to
+              activate your account, then come back and log in.
+            </p>
+          </section>
+
+          <div className="mt-10 space-y-4">
+            {error && (
+              <p role="alert" className="rounded-[10px] border border-destructive/30 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
+                {error}
+              </p>
+            )}
+            {notice && (
+              <p role="status" className="rounded-[10px] border border-primary/20 bg-primary/5 px-4 py-3 text-[13px] text-foreground">
+                {notice}
+              </p>
+            )}
+            <Link
+              to="/EmailAuth"
+              search={{ mode: "login" }}
+              replace
+              className="btn-primary-grad flex w-full items-center justify-center rounded-full py-3.5 text-[15px] font-semibold"
+            >
+              Go to log in
+            </Link>
+            <button
+              type="button"
+              onClick={onResend}
+              disabled={resending}
+              className="flex w-full items-center justify-center rounded-full border border-border bg-card py-3.5 text-[15px] font-semibold text-foreground transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {resending ? "Sending…" : "Resend email"}
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  const fieldClass = (invalid: boolean) =>
+    `flex h-[3.25rem] items-center rounded-[10px] border bg-card px-4 transition-all ${
+      invalid
+        ? "border-destructive/70"
+        : "border-border focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10"
+    }`;
+  const inputClass =
+    "h-full min-w-0 flex-1 bg-transparent text-[15px] text-foreground outline-none placeholder:text-muted-foreground";
 
   return (
     <main className="flex min-h-screen flex-col bg-background px-6">
@@ -76,11 +199,47 @@ function EmailAuthPage() {
         </section>
 
         <form onSubmit={submit} noValidate className="rise-in mt-12 space-y-6" style={{ animationDelay: "0.12s" }}>
+          {error && (
+            <p role="alert" className="rounded-[10px] border border-destructive/30 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p role="status" className="rounded-[10px] border border-primary/20 bg-primary/5 px-4 py-3 text-[13px] text-foreground">
+              {notice}
+            </p>
+          )}
+
+          {isSignup && (
+            <div className="space-y-2.5">
+              <label htmlFor="name" className="text-[13px] font-semibold text-foreground">
+                Full name
+              </label>
+              <div className={fieldClass(touched.name && !nameValid)}>
+                <input
+                  id="name"
+                  type="text"
+                  value={fullName}
+                  onChange={(event) => setFullName(event.target.value)}
+                  onBlur={() => setTouched((value) => ({ ...value, name: true }))}
+                  placeholder="Your full name"
+                  autoComplete="name"
+                  className={inputClass}
+                  aria-invalid={touched.name && !nameValid}
+                  aria-describedby="name-error"
+                />
+              </div>
+              {touched.name && !nameValid && (
+                <p id="name-error" className="text-[12px] text-destructive">Enter your name.</p>
+              )}
+            </div>
+          )}
+
           <div className="space-y-2.5">
             <label htmlFor="email" className="text-[13px] font-semibold text-foreground">
               Email address
             </label>
-            <div className={`flex h-[3.25rem] items-center rounded-[10px] border bg-card px-4 transition-all ${touched.email && !emailValid ? "border-destructive/70" : "border-border focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10"}`}>
+            <div className={fieldClass(touched.email && !emailValid)}>
               <input
                 id="email"
                 type="email"
@@ -89,7 +248,7 @@ function EmailAuthPage() {
                 onBlur={() => setTouched((value) => ({ ...value, email: true }))}
                 placeholder="you@example.com"
                 autoComplete="email"
-                className="h-full min-w-0 flex-1 bg-transparent text-[15px] text-foreground outline-none placeholder:text-muted-foreground"
+                className={inputClass}
                 aria-invalid={touched.email && !emailValid}
                 aria-describedby="email-error"
               />
@@ -100,18 +259,27 @@ function EmailAuthPage() {
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
               <label htmlFor="password" className="text-[13px] font-semibold text-foreground">Password</label>
-              {!isSignup && <button type="button" className="text-[12px] font-semibold text-primary hover:underline">Forgot password?</button>}
+              {!isSignup && (
+                <button
+                  type="button"
+                  onClick={onForgotPassword}
+                  disabled={resetting}
+                  className="text-[12px] font-semibold text-primary hover:underline disabled:opacity-60"
+                >
+                  {resetting ? "Sending…" : "Forgot password?"}
+                </button>
+              )}
             </div>
-            <div className={`flex h-[3.25rem] items-center rounded-[10px] border bg-card px-4 transition-all ${touched.password && !passwordValid ? "border-destructive/70" : "border-border focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10"}`}>
+            <div className={fieldClass(touched.password && !passwordValid)}>
               <input
                 id="password"
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 onBlur={() => setTouched((value) => ({ ...value, password: true }))}
-                placeholder="At least 8 characters"
+                placeholder={isSignup ? "At least 8 characters" : "Your password"}
                 autoComplete={isSignup ? "new-password" : "current-password"}
-                className="h-full min-w-0 flex-1 bg-transparent text-[15px] text-foreground outline-none placeholder:text-muted-foreground"
+                className={inputClass}
                 aria-invalid={touched.password && !passwordValid}
                 aria-describedby="password-error"
               />
@@ -119,7 +287,11 @@ function EmailAuthPage() {
                 {showPassword ? <EyeOff className="h-[18px] w-[18px]" strokeWidth={1.8} /> : <Eye className="h-[18px] w-[18px]" strokeWidth={1.8} />}
               </button>
             </div>
-            {touched.password && !passwordValid && <p id="password-error" className="text-[12px] text-destructive">Use at least 8 characters.</p>}
+            {touched.password && !passwordValid && (
+              <p id="password-error" className="text-[12px] text-destructive">
+                {isSignup ? "Use at least 8 characters." : "Enter your password."}
+              </p>
+            )}
           </div>
 
           <button type="submit" disabled={!canSubmit} className="btn-primary-grad mt-2 flex w-full items-center justify-center rounded-full py-3.5 text-[15px] font-semibold disabled:cursor-not-allowed disabled:opacity-50">

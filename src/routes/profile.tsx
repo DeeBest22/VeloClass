@@ -37,6 +37,7 @@ import { App as CapApp } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
 import { createFileRoute } from "@tanstack/react-router";
 import BottomNav from '@/components/bottom-nav'
+import { useAuth, profileFromUser } from "@/lib/auth";
 
 
 /* ─── Types ─── */
@@ -228,6 +229,7 @@ const EditProfile = ({ onBack, user }: { onBack: () => void; user: any }) => {
   });
   const [usernameStatus, setUsernameStatus] = useState<"idle"|"checking"|"available"|"taken"|"invalid">("idle");
   const [saving, setSaving] = useState(false);
+  const { updateProfile } = useAuth();
 
   // No backend yet — simulate an availability check against the assumed local user
   const checkUsername = (raw: string) => {
@@ -245,9 +247,12 @@ const EditProfile = ({ onBack, user }: { onBack: () => void; user: any }) => {
     if (usernameStatus === "checking") { toast.error("Still checking username…"); return; }
 
     setSaving(true);
-    // No backend yet — simulate saving against the assumed local user
-    await new Promise((r) => setTimeout(r, 500));
+    const res = await updateProfile({
+      fullName: `${formData.firstName.trim()} ${formData.lastName.trim()}`,
+      username: formData.username.replace(/^@/, "").toLowerCase().trim(),
+    });
     setSaving(false);
+    if (res.error) { toast.error(res.error); return; }
     toast.success("Profile updated!");
     onBack();
   };
@@ -518,9 +523,23 @@ const openExternalUrl = async (url: string) => {
 
 /* ─── MAIN ProfileDesign ─── */
 const ProfileDesign = () => {
-  const user = ASSUMED_USER;
+  // Real account details when signed in; the placeholder values only fill in what is missing.
+  const { user: authUser, signOut } = useAuth();
+  const me = profileFromUser(authUser);
+  const user: typeof ASSUMED_USER & { createdAt?: string | undefined } = authUser
+    ? {
+        ...ASSUMED_USER,
+        id: me.id,
+        name: me.name,
+        firstName: me.firstName,
+        username: me.username,
+        email: me.email,
+        createdAt: me.createdAt,
+        profilePicture: me.avatarUrl ?? ASSUMED_USER.profilePicture,
+      }
+    : ASSUMED_USER;
   const logout = async () => {
-    // No auth system yet — this is where a real sign-out call would go
+    await signOut();
   };
   const [currentView, setCurrentView] = useState<View>("main");
   const [showLogout, setShowLogout] = useState(false);

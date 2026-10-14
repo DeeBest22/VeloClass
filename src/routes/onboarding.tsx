@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useAuth } from "@/lib/auth";
 
 export const Route = createFileRoute("/onboarding")({
   head: () => ({
@@ -31,12 +32,16 @@ const slides = [
 
 function OnboardingPage() {
   const navigate = useNavigate();
+  const { completeOnboarding } = useAuth();
   const trackRef = useRef<HTMLDivElement>(null);
   const [index, setIndex] = useState(0);
 
   const isLast = index === slides.length - 1;
 
-  const finish = () => navigate({ to: "/" });
+  const finish = async () => {
+    await completeOnboarding();
+    navigate({ to: "/", replace: true });
+  };
 
   const goTo = (i: number) => {
     const el = trackRef.current;
