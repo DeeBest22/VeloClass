@@ -1,0 +1,232 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Patrick+Hand&display=swap');
+
+/* ─── Whiteboard-scoped CSS variables ─── */
+.whiteboard-root {
+  --background: 240 6% 7%;
+  --foreground: 240 10% 92%;
+
+  --card: 240 5% 10%;
+  --card-foreground: 240 10% 92%;
+
+  --popover: 240 5% 10%;
+  --popover-foreground: 240 10% 92%;
+
+  --primary: 239 84% 67%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 240 4% 16%;
+  --secondary-foreground: 240 10% 92%;
+
+  --muted: 240 4% 16%;
+  --muted-foreground: 240 5% 50%;
+
+  --accent: 239 84% 67%;
+  --accent-foreground: 0 0% 100%;
+
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 240 4% 18%;
+  --input: 240 4% 18%;
+  --ring: 239 84% 67%;
+
+  --radius: 0.625rem;
+
+  --panel-bg: 240 5% 9%;
+  --panel-surface: 240 4% 12%;
+  --panel-border: 240 4% 16%;
+  --panel-glow: 239 84% 67%;
+
+  --canvas-bg: 220 14% 10%;
+  --canvas-dot: 220 10% 22%;
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  font-family: var(--font-sans);
+}
+
+/* ─── Base resets scoped to whiteboard ─── */
+.whiteboard-root *,
+.whiteboard-root *::before,
+.whiteboard-root *::after {
+  box-sizing: border-box;
+  border-color: hsl(var(--border));
+}
+
+/* ─── Canvas background ─── */
+.whiteboard-root.bg-canvas,
+.whiteboard-root .bg-canvas {
+  background-color: hsl(var(--canvas-bg));
+}
+
+/* A transformed containing block keeps the board's fixed tool panels inside
+   the live-class stage, leaving the class header and control bar interactive. */
+.whiteboard-root--embedded {
+  isolation: isolate;
+}
+
+.whiteboard-root--fullscreen:fullscreen {
+  width: 100vw;
+  height: 100vh;
+}
+
+/* ─── Toolbar panel & buttons ─── */
+.whiteboard-root .toolbar-panel {
+  background: hsl(var(--panel-bg));
+  border: 1px solid hsl(var(--panel-border));
+  border-radius: var(--radius);
+  box-shadow:
+    0 0 0 1px hsl(var(--panel-border)),
+    0 8px 40px -8px rgba(0, 0, 0, 0.6),
+    0 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+}
+
+.whiteboard-root .tool-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: calc(var(--radius) - 2px);
+  border: none;
+  background: transparent;
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.whiteboard-root .tool-button:hover {
+  background: hsl(var(--panel-surface));
+  color: hsl(var(--primary));
+}
+
+.whiteboard-root .tool-button.active,
+.whiteboard-root .tool-button[data-active="true"] {
+  background: hsl(var(--primary) / 0.15);
+  color: hsl(var(--primary));
+}
+
+/* ─── Panel utilities ─── */
+.whiteboard-root .panel-shadow {
+  box-shadow:
+    0 0 0 1px hsl(var(--panel-border)),
+    0 8px 40px -8px rgba(0, 0, 0, 0.6),
+    0 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+}
+
+.whiteboard-root .swatch-ring {
+  box-shadow:
+    0 0 0 2px hsl(var(--panel-glow)),
+    0 0 12px hsl(var(--panel-glow) / 0.3);
+}
+
+/* ─── Slider ─── */
+.whiteboard-root .slider-track {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 0.25rem;
+  border-radius: 9999px;
+  cursor: pointer;
+  outline: none;
+  background: linear-gradient(
+    to right,
+    hsl(var(--primary)) 0%,
+    hsl(var(--primary)) var(--progress, 50%),
+    hsl(var(--panel-border)) var(--progress, 50%),
+    hsl(var(--panel-border)) 100%
+  );
+}
+
+.whiteboard-root .slider-track::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 9999px;
+  cursor: pointer;
+  background: hsl(var(--foreground));
+  border: 2px solid hsl(var(--primary));
+  box-shadow: 0 0 8px hsl(var(--primary) / 0.4);
+  transition: transform 0.15s ease;
+}
+
+.whiteboard-root .slider-track::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+@media (max-width: 768px) {
+  .whiteboard-root .slider-track::-webkit-slider-thumb {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+}
+
+/* ─── Animations ─── */
+@keyframes wb-panel-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.whiteboard-root .animate-panel-in {
+  animation: wb-panel-in 0.2s ease-out both;
+}
+
+@keyframes wb-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.whiteboard-root .animate-fade-in {
+  animation: wb-fade-in 0.25s ease-out both;
+}
+
+@keyframes wb-slide-up {
+  from { opacity: 0; transform: translateY(100%); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.whiteboard-root .animate-slide-up {
+  animation: wb-slide-up 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* ─── Mobile drawer ─── */
+.whiteboard-root .drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 40;
+  animation: wb-fade-in 0.15s ease-out;
+}
+
+.whiteboard-root .drawer-content {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  max-height: 80vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 1rem 1rem 0 0;
+  background: hsl(var(--card));
+  border-top: 1px solid hsl(var(--border));
+  animation: wb-slide-up 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.whiteboard-root .drawer-handle {
+  width: 2rem;
+  height: 0.25rem;
+  border-radius: 9999px;
+  background: hsl(var(--muted-foreground) / 0.3);
+  margin: 0.5rem auto;
+}
+
+/* ─── Touch optimization ─── */
+@media (pointer: coarse) {
+  .whiteboard-root button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+.whiteboard-root .touch-none {
+  touch-action: none;
+}

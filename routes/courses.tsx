@@ -1,0 +1,356 @@
+import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
+import {
+  Plus,
+  Search,
+  ArrowUpRight,
+  Megaphone,
+  Users,
+  Code2,
+  BookOpen,
+  FlaskConical,
+  ListChecks,
+  NotebookPen,
+  type LucideIcon,
+} from "lucide-react";
+import { useAuth } from "@/lib/auth";
+import noCourses from "@/assets/no-courses.png";
+import cardGreen from "@/assets/card-green.png";
+import cardPurple from "@/assets/card-purple.png";
+import cardRed from "@/assets/card-red.png";
+import cardYellow from "@/assets/card-yellow.png";
+import { getLastOpenedClassId, roleLabel, useMyClasses } from "@/lib/classes";
+
+export const Route = createFileRoute("/courses")({
+  head: () => ({
+    meta: [
+      { title: "Courses" },
+      {
+        name: "description",
+        content:
+          "A minimal mobile courses screen: continue where you left off, follow progress and browse every enrolled course.",
+      },
+      { property: "og:title", content: "Courses — Track Your Learning" },
+      {
+        property: "og:description",
+        content: "Continue learning, follow progress and browse your courses.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+    ],
+    links: [
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap",
+      },
+    ],
+  }),
+  component: Index,
+});
+
+type Course = {
+  title: string;
+  category: string;
+  lessons: number;
+  done: number;
+  id?: string;
+  color?: string;
+  role?: "teacher" | "student";
+  studentCount?: number;
+  archived?: boolean;
+  real?: boolean;
+};
+
+const courses: Course[] = [
+  { title: "Growing a Facebook Page", category: "Marketing", lessons: 12, done: 9 },
+  { title: "Community Building", category: "Strategy", lessons: 8, done: 4 },
+  { title: "Data Science Bootcamp", category: "Engineering", lessons: 24, done: 21 },
+  { title: "Target Audience Research", category: "Marketing", lessons: 10, done: 2 },
+];
+
+const filters = ["All", "In progress", "Completed"];
+
+type Accent = {
+  card: string;
+  ink: string;
+  track: string;
+  icon: LucideIcon;
+};
+
+const ACCENTS: Record<string, Accent> = {
+  Marketing: { card: "#F4D35E", ink: "#241D08", track: "rgba(36,29,8,0.18)", icon: Megaphone },
+  Strategy: { card: "#C9B6FF", ink: "#231A3A", track: "rgba(35,26,58,0.18)", icon: Users },
+  Engineering: { card: "#9BE87A", ink: "#132308", track: "rgba(19,35,8,0.18)", icon: Code2 },
+};
+const DEFAULT_ACCENT: Accent = { card: "#8FCFFF", ink: "#0E2233", track: "rgba(14,34,51,0.18)", icon: Users };
+
+function accentFor(category: string) {
+  return ACCENTS[category] ?? DEFAULT_ACCENT;
+}
+
+const CARD_STYLES = [
+  { bg: cardPurple, ink: "#FFFFFF", chip: "rgba(255,255,255,0.22)", arrow: "#744BFF" },
+  { bg: cardRed, ink: "#FFFFFF", chip: "rgba(255,255,255,0.22)", arrow: "#FF5D52" },
+  { bg: cardYellow, ink: "#2A1F05", chip: "rgba(255,255,255,0.42)", arrow: "#E9A21A" },
+  { bg: cardGreen, ink: "#FFFFFF", chip: "rgba(255,255,255,0.22)", arrow: "#4DB35D" },
+];
+const CARD_ICONS: LucideIcon[] = [FlaskConical, BookOpen, ListChecks, FlaskConical, NotebookPen];
+
+function CourseCard({ course, index, onOpen }: { course: Course; index: number; onOpen: () => void }) {
+  const style = CARD_STYLES[index % CARD_STYLES.length];
+  const Icon = CARD_ICONS[index % CARD_ICONS.length];
+  const pct = course.lessons ? Math.round((course.done / course.lessons) * 100) : 0;
+  const students = course.studentCount ?? 0;
+  const badge = course.real ? roleLabel(course.role ?? "student") : `${pct}%`;
+  const MetaIcon = course.real ? Users : ListChecks;
+  const meta = course.real
+    ? `${students} ${students === 1 ? "student" : "students"}${course.archived ? " · Archived" : ""}`
+    : `${course.done}/${course.lessons} lessons`;
+
+  return (
+    <li className="rise-in col-span-1">
+      <button
+        onClick={onOpen}
+        className="group relative block aspect-[600/717] w-full text-left transition-transform active:scale-[0.97] focus-visible:outline-none"
+        style={{ color: style.ink }}
+      >
+        <img
+          src={style.bg}
+          alt=""
+          aria-hidden
+          draggable={false}
+          className="pointer-events-none absolute inset-0 h-full w-full select-none"
+        />
+
+        <div className="relative flex h-full flex-col p-3">
+          <div className="flex items-start justify-between gap-2">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl" style={{ backgroundColor: style.chip }}>
+              <Icon className="h-5 w-5" strokeWidth={1.75} />
+            </span>
+            <span
+              className="mt-0.5 max-w-[60%] truncate rounded-full px-2 py-0.5 text-[10px] font-bold"
+              style={{ backgroundColor: style.chip }}
+            >
+              {badge}
+            </span>
+          </div>
+
+          <div className="mt-auto min-w-0 pr-1">
+            <h3 className="font-display line-clamp-3 text-[13.5px] leading-tight font-bold">{course.title}</h3>
+            <p className="mt-1.5 flex items-center gap-1 text-[11px] font-semibold">
+              <MetaIcon className="h-3 w-3 shrink-0" strokeWidth={2.25} />
+              <span className="truncate">{meta}</span>
+            </p>
+          </div>
+        </div>
+
+        <span className="absolute right-[-2.2%] top-[47.7%] grid aspect-square w-[17.8%] -translate-y-1/2 place-items-center rounded-full bg-white shadow-sm transition-transform group-hover:scale-105">
+          <ArrowUpRight className="h-[48%] w-[48%]" strokeWidth={2.5} style={{ color: style.arrow }} />
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function Index() {
+  const [filter, setFilter] = useState(0);
+  const [search, setSearch] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const router = useRouter();
+  const { user } = useAuth();
+  const myClassesQuery = useMyClasses();
+  const realClasses = myClassesQuery.data ?? [];
+  const useRealClasses = !myClassesQuery.isPending && realClasses.length > 0;
+  const lastOpenedId = getLastOpenedClassId(user?.id);
+  const realCourses: Course[] = realClasses.map((course) => ({
+    id: course.id,
+    title: course.name,
+    category: course.department || course.courseCode,
+    lessons: 0,
+    done: 0,
+    color: course.color,
+    role: course.myRole,
+    studentCount: course.studentCount,
+    archived: course.archived,
+    real: true,
+  }));
+  const activeCourses = useRealClasses ? realCourses : courses;
+
+  const current = useRealClasses
+    ? realCourses.find((course) => course.id === lastOpenedId) ?? realCourses.find((course) => !course.archived) ?? realCourses[0]
+    : courses.find((c) => c.done < c.lessons) ?? courses[0];
+
+  const shown = activeCourses.filter((course) =>
+    course !== current &&
+    (useRealClasses
+      ? filter === 0 || (filter === 1 ? !course.archived : course.archived)
+      : filter === 0 ? true : filter === 1 ? course.done < course.lessons : course.done === course.lessons) &&
+    `${course.title} ${course.category}`.toLowerCase().includes(search.trim().toLowerCase()),
+  );
+
+  const currentPct = Math.round((current.done / current.lessons) * 100);
+  const currentAccent = accentFor(current.category);
+  const CurrentIcon = currentAccent.icon;
+
+  useEffect(() => {
+    const closeMenu = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeMenu);
+    return () => document.removeEventListener("mousedown", closeMenu);
+  }, []);
+
+  const today = new Date().toLocaleDateString(undefined, {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  return (
+    <main className="font-body flex min-h-screen justify-center bg-white sm:py-8">
+   <style>{`
+  @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+  .font-display { font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; }
+  .font-body { font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; }
+  .font-mono-num { font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; }
+  html, body { background-color: #0a0a0f; }
+`}</style>
+
+      <div className="flex w-full max-w-[420px] flex-col bg-white text-[#0B0A0F] sm:rounded-[2.5rem] sm:border sm:border-black/5 sm:shadow-2xl sm:shadow-black/10">
+        <header className="px-6 pt-10">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="font-mono-num text-[10px] font-medium tracking-[0.2em] text-black/40 uppercase">
+                {today}
+              </p>
+              <h1 className="font-display mt-2 text-[1.9rem] leading-tight font-semibold tracking-tight">
+                Courses
+              </h1>
+            </div>
+            <div ref={menuRef} className="relative">
+            <button
+              aria-label="Add a course"
+              onClick={() => setMenuOpen((open) => !open)}
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-black/10 text-[#0B0A0F] transition-colors hover:bg-black/5 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/20"
+            >
+              <Plus className="h-4 w-4" strokeWidth={2} />
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-12 z-20 w-40 rounded-2xl border border-black/10 bg-white p-1.5 shadow-lg">
+                <button onClick={() => router.navigate({ to: "/create" })} className="w-full rounded-xl px-3 py-2 text-left text-sm font-medium hover:bg-black/[0.03]">Create class</button>
+                <button onClick={() => router.navigate({ to: "/join" })} className="w-full rounded-xl px-3 py-2 text-left text-sm font-medium hover:bg-black/[0.03]">Join with code</button>
+              </div>
+            )}
+            </div>
+          </div>
+
+          <div className="mt-5 flex items-center gap-2 rounded-2xl border border-black/10 bg-black/[0.03] px-4 py-3 focus-within:border-black/20">
+            <Search className="h-4 w-4 shrink-0 text-black/40" strokeWidth={2} />
+            <input
+              type="search"
+              placeholder="Search courses"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className="min-w-0 flex-1 bg-transparent text-sm text-[#0B0A0F] outline-none placeholder:text-black/40"
+            />
+          </div>
+        </header>
+
+     {!myClassesQuery.isPending && current && <section className="px-6 pt-7">
+  <h2 className="font-mono-num text-[10px] font-medium tracking-[0.2em] text-black/40 uppercase">
+    Continue learning
+  </h2>
+
+  <article className="relative mt-3 overflow-hidden rounded-[28px] bg-white p-6 shadow-[0_2px_8px_rgba(51,47,99,0.04),0_16px_40px_-16px_rgba(51,47,99,0.12)]">
+    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#EEEBFC]">
+      <CurrentIcon aria-hidden className="h-5 w-5 text-[#7C6FEE]" strokeWidth={1.75} />
+    </div>
+
+    <h3 className="font-display mt-5 text-xl leading-snug font-semibold text-[#211D45]">
+      {current.title}
+    </h3>
+
+    <div className="mt-3 flex gap-3">
+      <div className="w-[3px] shrink-0 rounded-full bg-[#7C6FEE]/25" />
+      <p className="text-[0.8rem] leading-relaxed text-[#211D45]/55">
+      {current.real
+        ? `${current.category} · ${roleLabel(current.role ?? "student")} · ${current.studentCount ?? 0} students`
+        : <>{current.category} &middot; Lesson {current.done + 1} of {current.lessons}. You&rsquo;re {currentPct}% of the way through.</>}
+      </p>
+    </div>
+
+    {!current.real && <div className="mt-6 h-1 w-full overflow-hidden rounded-full bg-[#211D45]/[0.06]">
+      <div
+        className="h-full rounded-full bg-[#7C6FEE] transition-[width] duration-700"
+        style={{ width: `${currentPct}%` }}
+      />
+    </div>}
+
+    <button onClick={() => current.id && router.navigate({ to: current.myRole === "teacher" ? "/teacher" : "/class", search: { classId: current.id } })} className="mt-6 flex w-full items-center justify-center gap-1.5 rounded-full bg-[#EEEBFC] px-5 py-3 text-sm font-semibold text-[#4C3FCC] transition-colors hover:bg-[#E3DEFB] active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#7C6FEE]">
+      Resume
+      <ArrowUpRight className="h-4 w-4" strokeWidth={2.25} />
+    </button>
+  </article>
+</section>}
+        {myClassesQuery.isPending && <div className="mx-6 mt-7 h-64 animate-pulse rounded-[28px] bg-black/[0.05]" />}
+        <div className="no-scrollbar mt-7 flex gap-2 overflow-x-auto px-6">
+          {filters.map((f, i) => (
+            <button
+              key={f}
+              onClick={() => setFilter(i)}
+              className={`shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/20 ${
+                filter === i
+                  ? "bg-[#0B0A0F] text-white"
+                  : "border border-black/10 text-black/45 hover:text-black/80"
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+
+   
+
+        <div className="flex-1 px-6 pt-5 pb-28">
+          {myClassesQuery.isError ? (
+            <div className="rounded-[24px] border border-dashed border-black/10 px-5 py-10 text-center">
+              <p className="text-xs text-black/45">We couldn't load your classes.</p>
+              <button onClick={() => void myClassesQuery.refetch()} className="mt-3 text-sm font-semibold">Try again</button>
+            </div>
+          ) : myClassesQuery.isPending ? (
+            <ul className="grid grid-cols-2 gap-3 animate-pulse"><li className="h-44 rounded-[24px] bg-black/[0.05]" /><li className="h-44 rounded-[24px] bg-black/[0.05]" /></ul>
+          ) : shown.length > 0 ? (
+            <ul className="grid grid-cols-2 gap-3">
+              {shown.map((course, i) => (
+                <CourseCard
+                  key={course.title}
+                  course={course}
+                  index={i}
+                  onOpen={() => course.id && router.navigate({ to: course.myRole === "teacher" ? "/teacher" : "/class", search: { classId: course.id } })}
+                />
+              ))}
+            </ul>
+          ) : (
+            <div className="flex flex-col items-center px-5 py-6 text-center">
+              <img
+                src={noCourses}
+                alt="A red panda detective with a magnifying glass sitting on a stack of books"
+                width={640}
+                height={475}
+                draggable={false}
+                className="w-60 max-w-full select-none"
+              />
+              <p className="font-display mt-4 text-[15px] font-bold">Nothing here yet</p>
+              <p className="mt-1 text-xs text-black/45">
+                {useRealClasses ? "Classes matching this filter will show up here." : "Courses matching this filter will show up here."}
+              </p>
+              {!useRealClasses && <div className="mt-4 flex justify-center gap-3 text-sm font-semibold"><button onClick={() => router.navigate({ to: "/create" })}>Create class</button><button onClick={() => router.navigate({ to: "/join" })}>Join with code</button></div>}
+            </div>
+          )}
+          {!useRealClasses && <div className="mt-4 flex justify-center gap-3 text-sm font-semibold text-black/45"><button onClick={() => router.navigate({ to: "/create" })}>Create class</button><button onClick={() => router.navigate({ to: "/join" })}>Join with code</button></div>}
+        </div>
+      </div>
+    </main>
+  );
+}
