@@ -12,11 +12,16 @@ import {
   MessageSquare,
   FolderOpen,
   GraduationCap,
-  Users
+  Users,
+  FileText,
+  ClipboardCheck,
+  BookOpen,
 } from "lucide-react";
 import pfpImage from "@/assets/pfp.png";
+import noActivityImage from "@/assets/no_activity_calendar.png";
 import { useAuth, profileFromUser } from "@/lib/auth";
-import { roleLabel, useMyClasses } from "@/lib/classes";
+import { getLastOpenedClassId, roleLabel, useMyClasses } from "@/lib/classes";
+import { useRecentClassActivity } from "@/lib/work";
 import FloatingCallButton from '@/components/FloatingActionButton'
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -90,16 +95,10 @@ const alerts = [
   },
 ];
 
-const activity = [
-  { tag: "Grade", title: "Poster critique · A (92%)", time: "1h" },
-  { tag: "Note", title: "Field trip moved to Friday", time: "3h" },
-  { tag: "Reading", title: "Week 6 list posted", time: "Yesterday" },
-];
-
 const tools = [
 
-  { icon: MessageSquare, label: "Messages", bg: "#DDF3E4", accent: "#0D9B57" },
-  { icon: FolderOpen, label: "Resources", bg: "#FFE9D6", accent: "#C2680E" },
+  { icon: MessageSquare, label: "Messages", bg: "#DDF3E4", accent: "#0D9B57", to: "/chat" },
+  { icon: FolderOpen, label: "Resources", bg: "#FFE9D6", accent: "#C2680E", to: "/files" },
   { icon: GraduationCap, label: "Grades", bg: "#FDE2E2", accent: "#D3402E" },
 ];
 
@@ -154,11 +153,65 @@ function EmptyState({ title, meta }: { title: string; meta: string }) {
   );
 }
 
+function ActivityEmptyState() {
+  return (
+    <div
+      className="flex flex-col items-center rounded-[1.5rem] px-6 pb-7 pt-6 text-center"
+      style={{ backgroundColor: "white", border: "1px solid rgba(0,0,0,0.06)" }}
+    >
+      <img
+        src={noActivityImage}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+        className="h-36 w-auto select-none object-contain"
+      />
+      <p className="mt-4 text-[15px] font-bold" style={{ color: INK }}>
+        No recent activity yet
+      </p>
+      <p className="mt-1 max-w-[16rem] text-[12px] leading-relaxed" style={{ color: INK_SOFT }}>
+        Classwork, assignments and assessments will show up here.
+      </p>
+      <Link
+        to="/courses"
+        className="mt-5 inline-flex items-center gap-1.5 rounded-full px-5 py-2.5 text-[12.5px] font-semibold transition-colors hover:bg-black/[0.03] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+        style={{ border: "1px solid rgba(0,0,0,0.12)", color: INK, outlineColor: INK }}
+      >
+        Browse courses
+      
+      </Link>
+    </div>
+  );
+}
+
 function HomePage() {
   const { user } = useAuth();
+  const activeClassId = getLastOpenedClassId(user?.id);
   const profile = profileFromUser(user);
   const myClassesQuery = useMyClasses();
   const realClasses = myClassesQuery.data ?? [];
+  const recentActivityQuery = useRecentClassActivity(realClasses.map((course) => course.id));
+  const classNames = new Map(realClasses.map((course) => [course.id, course.name]));
+  const activityStyles = {
+    assignment: { tag: "Assignment", icon: FileText, bg: "#D9CFFB", accent: "#5B3FE0" },
+    assessment: { tag: "Assessment", icon: ClipboardCheck, bg: "#FFE0AE", accent: "#9A6412" },
+    classwork: { tag: "Classwork", icon: BookOpen, bg: "#C3EFAE", accent: "#3C7A22" },
+  } as const;
+  const activity = (recentActivityQuery.data ?? []).slice(0, 4).map((item) => {
+    const style =
+      item.type === "assignment"
+        ? activityStyles.assignment
+        : item.type === "assessment"
+          ? activityStyles.assessment
+          : activityStyles.classwork;
+    return {
+      ...style,
+      id: `${item.class_id}-${item.title}-${item.created_at}`,
+      title: item.title,
+      className: classNames.get(item.class_id) ?? "Class",
+      time: new Date(item.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    };
+  });
   const visibleClasses = realClasses.filter((course) => !course.archived).slice(0, 3);
   const enrolledCount = realClasses.filter((course) => course.myRole === "student").length;
   const teachingCount = realClasses.filter((course) => course.myRole === "teacher").length;
@@ -322,7 +375,8 @@ function HomePage() {
           <div className="mt-4 grid grid-cols-4 gap-3">
             {tools.map((t) => (
               <Link
-                to="/"
+                to={t.to ?? "/"}
+                search={t.to === "/files" && activeClassId ? { classId: activeClassId } : undefined}
                 key={t.label}
                 className="flex flex-col items-center gap-2 rounded-2xl py-3.5 transition-transform hover:-translate-y-0.5"
                 style={{ backgroundColor: "white", border: "1px solid rgba(0,0,0,0.06)" }}
@@ -397,33 +451,54 @@ function HomePage() {
               Show all
             </button>
           </div>
-          <div className="mt-4 space-y-4" style={activity.length > 0 ? { borderColor: "rgba(0,0,0,0.09)", borderLeftWidth: 1, paddingLeft: 16 } : undefined}>
-            {activity.length === 0 && (
-              <EmptyState title="No activity yet" meta="Grades, notes and updates will show up here" />
-            )}
-            {activity.map((a) => (
-              <div key={a.title} className="relative">
-                <span
-                  className="absolute -left-[18.5px] top-1.5 h-1.5 w-1.5 rounded-full"
-                  style={{ backgroundColor: "rgba(0,0,0,0.18)" }}
-                />
-                <div className="flex items-baseline justify-between gap-3">
-                  <p
-                    className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-                    style={{ color: INK_SOFT }}
+          {activity.length === 0 ? (
+            <div className="mt-4">
+              <ActivityEmptyState />
+            </div>
+          ) : (
+            <ul
+              className="mt-4 overflow-hidden rounded-[1.5rem] divide-y"
+              style={{
+                backgroundColor: "white",
+                border: "1px solid rgba(0,0,0,0.06)",
+                borderColor: "rgba(0,0,0,0.06)",
+              }}
+            >
+              {activity.map((a) => (
+                <li
+                  key={a.id}
+                  className="flex items-center gap-3.5 px-4 py-3.5 transition-colors hover:bg-black/[0.02]"
+                  style={{ borderColor: "rgba(0,0,0,0.05)" }}
+                >
+                  <div
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-xl"
+                    style={{ backgroundColor: a.bg }}
                   >
-                    {a.tag}
-                  </p>
-                  <span className="shrink-0 text-[10.5px] tabular-nums" style={{ color: INK_SOFT }}>
-                    {a.time}
-                  </span>
-                </div>
-                <p className="mt-0.5 text-[13.5px] font-medium leading-snug" style={{ color: INK }}>
-                  {a.title}
-                </p>
-              </div>
-            ))}
-          </div>
+                    <a.icon className="h-[18px] w-[18px]" style={{ color: a.accent }} strokeWidth={1.75} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13.5px] font-semibold leading-snug" style={{ color: INK }}>
+                      {a.title}
+                    </p>
+                    <p className="mt-0.5 truncate text-[11.5px]" style={{ color: INK_SOFT }}>
+                      {a.className}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <span className="text-[11px] font-medium tabular-nums" style={{ color: INK_SOFT }}>
+                      {a.time}
+                    </span>
+                    <span
+                      className="rounded-full px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-wider"
+                      style={{ backgroundColor: a.bg, color: a.accent }}
+                    >
+                      {a.tag}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       </div>
     </div>

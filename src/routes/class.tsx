@@ -107,6 +107,7 @@ const feed = [
 ];
 
 type ClassworkItem = {
+  id: string;
   day: string;
   month: string;
   title: string;
@@ -194,7 +195,7 @@ function ClassHome() {
   const workQuery = useSharedWork(classId);
   const classwork: ClassworkItem[] = (workQuery.data ?? []).slice().sort((a, b) => a.due.localeCompare(b.due)).map((item) => {
     const due = item.due.replace(/^Due |^Closed /, ""); const parsed = new Date(due);
-    return { day: Number.isNaN(parsed.getTime()) ? "" : String(parsed.getDate()), month: Number.isNaN(parsed.getTime()) ? "" : parsed.toLocaleDateString("en-US", { month: "short" }), title: item.title, meta: item.type, status: "upcoming", due: item.due };
+    return { id: item.id, day: Number.isNaN(parsed.getTime()) ? "" : String(parsed.getDate()), month: Number.isNaN(parsed.getTime()) ? "" : parsed.toLocaleDateString("en-US", { month: "short" }), title: item.title, meta: item.type, status: "upcoming", due: item.due };
   });
   const doneCount = 0;
   const counts = (workQuery.data ?? []).reduce<{ Assignments: number; Assessments: number }>((result, item) => { if (item.type === "Assignment") result.Assignments += 1; if (item.type === "Assessment") result.Assessments += 1; return result; }, { Assignments: 0, Assessments: 0 });
@@ -391,6 +392,10 @@ function ClassHome() {
                 return (
                   <div
                     key={item.title}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => void router.navigate({ to: "/work", search: { classId: overview.id, workId: item.id } })}
+                    onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void router.navigate({ to: "/work", search: { classId: overview.id, workId: item.id } }); }}
                     className="relative flex gap-3 transition-opacity active:opacity-70"
                   >
                     {!isLast && (

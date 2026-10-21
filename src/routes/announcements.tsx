@@ -4,10 +4,14 @@ import { ArrowUp, ChevronLeft, FileText, MoreHorizontal, Pin, Reply, X } from 'l
 
 import headerBg from '@/assets/course-header-bg.jpg';
 import lecturerPfp from '@/assets/lecturer-pfp.png';
+import { useAuth } from '@/lib/auth';
+import { getLastOpenedClassId, useClassOverview } from '@/lib/classes';
+import { createAnnouncement, replyToAnnouncement, useAnnouncements } from '@/lib/announcements';
 
 /* Announcements page for a single course. Self-contained: data, components, sheet and styles. */
 
 export const Route = createFileRoute('/announcements')({
+  validateSearch: (search: Record<string, unknown>): { classId?: string } => typeof search.classId === 'string' ? { classId: search.classId } : {},
   head: () => ({
     meta: [
       { title: 'Announcements · MCE 201' },
@@ -42,9 +46,9 @@ const C = {
 };
 
 type Group = 'Pinned' | 'Today' | 'Earlier this week' | 'Last week';
-type Reply = { id: number; name: string; text: string };
+type Reply = { id: string | number; name: string; text: string };
 type Post = {
-  id: number;
+  id: string | number;
   author: string;
   initials: string;
   role: 'Lecturer' | 'Teaching assistant';
@@ -191,7 +195,7 @@ function AnnouncementCard({ post, onOpen }: { post: Post; onOpen: () => void }) 
 
 const EXIT_MS = 260;
 
-function PostSheet({ post, onClose, onReply }: { post: Post; onClose: () => void; onReply: (text: string) => void }) {
+function PostSheet({ post, courseCode, onClose, onReply }: { post: Post; courseCode: string; onClose: () => void; onReply: (text: string) => void }) {
   const [draft, setDraft] = useState('');
   const [closing, setClosing] = useState(false);
 
@@ -246,7 +250,7 @@ function PostSheet({ post, onClose, onReply }: { post: Post; onClose: () => void
             <Avatar post={post} size={44} />
             <div>
               <p className="text-[14px] font-semibold" style={{ color: C.ink }}>{post.author}</p>
-              <p className="text-[13px]" style={{ color: C.text3 }}>{post.role} · {COURSE.code} · {post.time}</p>
+              <p className="text-[13px]" style={{ color: C.text3 }}>{post.role} · {courseCode} · {post.time}</p>
             </div>
           </div>
           <h2 id="ann-sheet-title" className="mt-6 text-[24px] font-semibold leading-[30px] tracking-[-0.02em]" style={{ color: C.ink }}>
@@ -303,9 +307,19 @@ function PostSheet({ post, onClose, onReply }: { post: Post; onClose: () => void
 
 function AnnouncementsPage() {
   const router = useRouter();
-  const [posts, setPosts] = useState<Post[]>(POSTS);
+  const { user } = useAuth();
+  const { classId: searchedClassId } = Route.useSearch();
+  const classId = searchedClassId ?? getLastOpenedClassId(user?.id);
+  const overview = useClassOverview(classId);
+  const announcementQuery = useAnnouncements(classId);
+  const [composer, setComposer] = useState(false);
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [posting, setPosting] = useState(false);
+  const posts: Post[] = (announcementQuery.data ?? []).map((post) => ({ id: post.id, author: post.author_name, initials: post.author_name.slice(0, 2).toUpperCase(), role: post.is_teacher ? 'Lecturer' : 'Teaching assistant', group: 'Today', time: new Date(post.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), title: post.title, body: post.body, file: post.files[0] ? { name: post.files[0].name, size: `${Math.ceil(post.files[0].size / 1024)} KB` } : undefined, replyCount: post.replies.length, replies: post.replies }));
   const [filter, setFilter] = useState<Filter>('All');
-  const [openId, setOpenId] = useState<number | null>(null);
+  const [openId, setOpenId] = useState<string | number | null>(null);
 
   const open = posts.find((p) => p.id === openId) ?? null;
   const unread = posts.filter((p) => p.unread).length;
@@ -315,20 +329,10 @@ function AnnouncementsPage() {
     return GROUPS.map((g) => ({ g, items: list.filter((p) => p.group === g) })).filter((x) => x.items.length > 0);
   }, [posts, filter]);
 
-  const openPost = (id: number) => {
-    setPosts((ps) => ps.map((p) => (p.id === id ? { ...p, unread: false } : p)));
-    setOpenId(id);
-  };
+  const openPost = (id: string | number) => setOpenId(id);
 
-  const addReply = (text: string) => {
-    setPosts((ps) =>
-      ps.map((p) =>
-        p.id === openId
-          ? { ...p, replyCount: p.replyCount + 1, replies: [...p.replies, { id: Date.now(), name: 'You', text }] }
-          : p,
-      ),
-    );
-  };
+  const addReply = (text: string) => { if (classId && openId) void replyToAnnouncement(classId, String(openId), text).catch((error) => alert(error.message)); };
+  const postAnnouncement = async () => { if (!classId || !title.trim() || !body.trim()) return; setPosting(true); try { await createAnnouncement(classId, title, body, files); setTitle(''); setBody(''); setFiles([]); setComposer(false); } catch (error) { alert(error instanceof Error ? error.message : 'We could not post this announcement.'); } finally { setPosting(false); } };
 
   return (
     <div className="ann-root min-h-screen" style={{ background: '#E8E8E4' }}>
@@ -351,14 +355,14 @@ function AnnouncementsPage() {
               <ChevronLeft size={20} strokeWidth={2.25} className="text-white" />
             </button>
        
-            <button type="button" aria-label="More options" className="-mr-2 grid h-11 w-11 place-items-center rounded-full active:bg-white/10">
+            <button type="button" onClick={() => overview.data?.myRole === 'teacher' && setComposer(true)} aria-label="More options" className="-mr-2 grid h-11 w-11 place-items-center rounded-full active:bg-white/10">
               <MoreHorizontal size={21} />
             </button>
           </div>
           <div className="relative mt-5">
-            <span className="inline-flex rounded-full bg-white/10 px-2.5 py-1 text-[12px] font-semibold tracking-wide">{COURSE.code}</span>
-            <h1 className="mt-2.5 text-[28px] font-semibold leading-[34px] tracking-[-0.03em]">{COURSE.name}</h1>
-            <p className="mt-1.5 text-[13.5px] text-white/60">{COURSE.lecturer} · {COURSE.students} students</p>
+            <span className="inline-flex rounded-full bg-white/10 px-2.5 py-1 text-[12px] font-semibold tracking-wide">{overview.data?.courseCode ?? ''}</span>
+            <h1 className="mt-2.5 text-[28px] font-semibold leading-[34px] tracking-[-0.03em]">{overview.data?.name ?? 'Announcements'}</h1>
+            <p className="mt-1.5 text-[13.5px] text-white/60">{overview.data?.teacherName ?? 'Teacher'} · {overview.data?.studentCount ?? 0} students</p>
           </div>
         </header>
 
@@ -395,6 +399,7 @@ function AnnouncementsPage() {
         </div>
 
         <main className="px-4 pb-12">
+          {composer && <section className="mt-6 rounded-[24px] bg-white p-4 ring-1 ring-black/[0.035]"><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Announcement title" className="w-full bg-transparent text-[16px] font-semibold outline-none" /><textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="Write an announcement" className="mt-3 min-h-24 w-full resize-none bg-transparent text-[14px] outline-none" /><input className="mt-2 text-xs" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []).slice(0, 5))} /><div className="mt-3 flex justify-end gap-2"><button type="button" onClick={() => setComposer(false)} className="rounded-full px-3 py-2 text-xs font-semibold">Cancel</button><button type="button" disabled={posting || !title.trim() || !body.trim()} onClick={() => void postAnnouncement()} className="rounded-full px-4 py-2 text-xs font-semibold text-white disabled:opacity-40" style={{ background: C.navy }}>{posting ? 'Posting…' : 'Post'}</button></div></section>}
           {grouped.length > 0 ? (
             grouped.map(({ g, items }) => (
               <section key={g} className="pt-6">
@@ -413,7 +418,7 @@ function AnnouncementsPage() {
         </main>
       </div>
 
-      {open && <PostSheet key={open.id} post={open} onClose={() => setOpenId(null)} onReply={addReply} />}
+      {open && <PostSheet key={open.id} post={open} courseCode={overview.data?.courseCode ?? ''} onClose={() => setOpenId(null)} onReply={addReply} />}
     </div>
   );
 }

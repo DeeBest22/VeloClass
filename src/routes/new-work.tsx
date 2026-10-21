@@ -494,7 +494,7 @@ function NewWork() {
     setPhase("sharing");
     const started = Date.now();
     try {
-      const result = await createWork({ classId, type, title: trimmedTitle, instructions, dueAt: latest, points: graded ? pointsValue : null, durationMinutes: type === "Assessment" ? duration : null, questions: type === "Assessment" ? questions : [], files });
+      const result = await createWork({ classId, type, title: trimmedTitle, instructions, dueAt: latest, points: graded ? pointsValue : null, durationMinutes: type === "Assessment" ? duration : null, questions, files });
       setFailedFiles(result.failedFiles);
       const remaining = Math.max(0, 700 - (Date.now() - started));
       timerRef.current = setTimeout(() => setPhase("done"), remaining);

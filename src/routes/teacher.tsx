@@ -500,6 +500,7 @@ function TeacherClass() {
                   <li key={s.id}>
                     <button
                       type="button"
+                      onClick={() => void router.navigate({ to: "/work", search: { classId: overview.id, workId: s.id } })}
                       className="flex w-full items-center gap-4 py-4 text-left transition-opacity active:opacity-60"
                     >
                       <span

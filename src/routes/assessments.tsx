@@ -237,6 +237,7 @@ function Assessments() {
               </span>
               <button
                 type="button"
+                onClick={() => void router.navigate({ to: "/work", search: { classId: classId ?? "", workId: assessment.id } })}
                 className="rounded-full bg-background px-4 py-2 text-[12px] font-bold text-foreground transition-transform active:scale-95"
               >
                 Start
@@ -246,19 +247,7 @@ function Assessments() {
         </article>)}
       </div>}
 
-      {/* List */}
-      <div className="mx-6 mt-7 grid grid-cols-3 rounded-2xl bg-surface py-4 text-center">
-        {[
-          { v: assessments.filter((a) => a.status === "open").length, l: "Open" },
-          { v: assessments.filter((a) => a.status === "closed").length, l: "Scheduled" },
-          { v: "—", l: "Avg. score" },
-        ].map((s, i) => (
-          <div key={s.l} className={i > 0 ? "border-l border-border" : ""}>
-            <p className="text-[18px] font-extrabold text-foreground">{s.v}</p>
-            <p className="mt-0.5 text-[11px] font-semibold text-muted-foreground">{s.l}</p>
-          </div>
-        ))}
-      </div>
+   
 
       <p className="px-6 pt-7 text-[11px] font-bold tracking-[0.18em] text-muted-foreground">
         {list.length} AVAILABLE
@@ -269,6 +258,7 @@ function Assessments() {
           <li key={a.id}>
             <button
               type="button"
+              onClick={() => void router.navigate({ to: "/work", search: { classId: classId ?? "", workId: a.id } })}
               className="flex w-full items-center gap-4 py-4 text-left transition-opacity active:opacity-60"
             >
               <span className="grid size-[68px] shrink-0 place-items-center overflow-hidden rounded-2xl bg-surface">

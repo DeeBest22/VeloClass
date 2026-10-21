@@ -1,14 +1,20 @@
-import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { ChevronLeft, ChevronRight, Play, Search, SlidersHorizontal } from "lucide-react";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { ChevronLeft, ChevronRight, FileText, Search, SlidersHorizontal, Video } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import folderTileAsset from "@/assets/file_icon.png";
-import catPhotoAsset from "@/assets/cat-photo.png";
-import uiStillAsset from "@/assets/ui-still.png";
 import { Button } from "@/components/ui/button";
 import FileFloatingActionButton from "@/components/FileFloatingActionButton";
+import { ResourceActionMenu } from "@/components/ResourceActionMenu";
+import { createClassFolder, openClassFile, uploadClassFile, useClassResources } from "@/lib/class-files";
+import { useClassOverview } from "@/lib/classes";
 
 export const Route = createFileRoute("/files_/$folderId")({
+  validateSearch: (search: Record<string, unknown>): { classId?: string; folderName?: string } => ({
+    classId: typeof search.classId === "string" ? search.classId : undefined,
+    folderName: typeof search.folderName === "string" ? search.folderName : undefined,
+  }),
   head: ({ params }) => {
     const title = formatFolderTitle(params.folderId);
     return {
@@ -39,19 +45,6 @@ type Subfolder = {
   faded: boolean;
 };
 
-type MediaTile = {
-  id: string;
-  src: string;
-  alt: string;
-};
-
-type VideoItem = {
-  id: string;
-  title: string;
-  duration: string;
-  poster: string;
-};
-
 const PARENT_LABEL = "My Folder";
 
 // A route param like "lecture-notes-1758..." -> "Lecture Notes" for display
@@ -60,34 +53,6 @@ function formatFolderTitle(id: string): string {
   const words = id.split("-").filter((part) => Number.isNaN(Number(part)));
   const label = words.length > 0 ? words : [id];
   return label.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
-}
-
-// Mock contents — swap for real folder data once the files API is wired up.
-function getFolderContents(folderId: string): {
-  subfolders: Subfolder[];
-  bigImage: MediaTile;
-  wideImage: MediaTile;
-  smallImages: [MediaTile, MediaTile];
-  video: VideoItem;
-} {
-  return {
-    subfolders: [
-      { id: `${folderId}-1`, title: "Naskah Asli", files: "1 files", size: "2 KB", faded: false },
-      { id: `${folderId}-2`, title: "Secret Files", files: "2400 files", size: "64 GB", faded: false },
-    ],
-    bigImage: { id: `${folderId}-img-big`, src: catPhotoAsset, alt: "Course mascot illustration" },
-    wideImage: { id: `${folderId}-img-wide`, src: uiStillAsset, alt: "UI design reference" },
-    smallImages: [
-      { id: `${folderId}-img-small-1`, src: uiStillAsset, alt: "UI design reference" },
-      { id: `${folderId}-img-small-2`, src: catPhotoAsset, alt: "Course mascot illustration" },
-    ],
-    video: {
-      id: `${folderId}-video-1`,
-      title: "Workshop Walkthrough",
-      duration: "4:12",
-      poster: uiStillAsset,
-    },
-  };
 }
 
 function EllipsisIcon({ className }: { className?: string }) {
@@ -132,19 +97,6 @@ function BackButton() {
   );
 }
 
-function SearchButton() {
-  return (
-    <Button
-      variant="icon"
-      className="h-9 w-9 shrink-0 rounded-full bg-black/[0.03] transition-colors hover:bg-black/[0.06]"
-      aria-label="Search files"
-      title="Search files"
-    >
-      <Search size={20} className="text-foreground" />
-    </Button>
-  );
-}
-
 function FilterButton() {
   return (
     <Button
@@ -158,109 +110,54 @@ function FilterButton() {
   );
 }
 
-function Breadcrumb({ current }: { current: string }) {
+function Breadcrumb({ course, current }: { course?: string; current: string }) {
   return (
     <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5">
-      <span className="truncate text-[15px] text-muted-foreground">{PARENT_LABEL}</span>
+      <span className="truncate text-[15px] text-muted-foreground">{course ?? PARENT_LABEL}</span>
       <ChevronRight size={16} className="shrink-0 text-muted-foreground/60" />
       <span className="truncate text-[15px] font-semibold text-foreground">{current}</span>
     </nav>
   );
 }
 
-function SubfolderCard({ title, files, size, faded }: Subfolder) {
+function SubfolderCard({ id, title, files, size, faded, classId, isTeacher }: Subfolder & { classId: string; isTeacher: boolean }) {
   return (
-    <article className="folder-card">
+    <Link to="/files/$folderId" params={{ folderId: id }} search={{ classId, folderName: title }} className="folder-card block text-left no-underline">
       <div className="flex items-start justify-between">
         <div className={faded ? "opacity-40" : ""}>
           <img src={folderTileAsset} alt="" className="h-12 w-12 object-contain" />
         </div>
-        <MoreButton label={`More options for ${title}`} />
+        {isTeacher && <ResourceActionMenu classId={classId} id={id} kind="folder" name={title} isTeacher={isTeacher} />}
       </div>
       <h3 className="mt-2 truncate text-[15px] font-medium text-foreground">{title}</h3>
       <div className="mt-1 flex items-center justify-between gap-3 text-xs">
         <span className="text-muted-foreground">{files}</span>
         <strong className="font-semibold text-foreground">{size}</strong>
       </div>
-    </article>
-  );
-}
-
-function ImageTile({ tile, heightPx, className = "" }: { tile: MediaTile; heightPx: number; className?: string }) {
-  return (
-    <button
-      type="button"
-      className={`group relative w-full overflow-hidden rounded-2xl ${className}`}
-      style={{ height: heightPx }}
-      aria-label={`Open ${tile.alt}`}
-    >
-      <img src={tile.src} alt={tile.alt} className="h-full w-full object-cover" />
-      <span className="absolute inset-0 bg-black/0 transition-colors group-hover:bg-black/10" />
-    </button>
-  );
-}
-
-function ImagesGrid({
-  bigImage,
-  wideImage,
-  smallImages,
-}: {
-  bigImage: MediaTile;
-  wideImage: MediaTile;
-  smallImages: [MediaTile, MediaTile];
-}) {
-  return (
-    <div className="grid grid-cols-2 gap-3">
-      <ImageTile tile={bigImage} heightPx={180} className="row-span-2" />
-      <ImageTile tile={wideImage} heightPx={84} />
-      <div className="grid grid-cols-2 gap-3">
-        <ImageTile tile={smallImages[0]} heightPx={84} />
-        <ImageTile tile={smallImages[1]} heightPx={84} />
-      </div>
-    </div>
-  );
-}
-
-function VideoTile({ video }: { video: VideoItem }) {
-  return (
-    <button
-      type="button"
-      className="group relative block h-[160px] w-full overflow-hidden rounded-2xl"
-      aria-label={`Play ${video.title}`}
-    >
-      <img src={video.poster} alt="" className="h-full w-full object-cover" />
-      <span className="absolute inset-0 bg-black/10 transition-colors group-hover:bg-black/20" />
-      <span className="absolute inset-0 flex items-center justify-center">
-        <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white/90 shadow-lg">
-          <Play size={22} className="ml-0.5 text-[#071a33]" fill="currentColor" />
-        </span>
-      </span>
-      <span className="absolute bottom-2.5 right-2.5 rounded-md bg-black/45 px-1.5 py-0.5 text-[11px] font-medium text-white">
-        {video.duration}
-      </span>
-    </button>
+    </Link>
   );
 }
 
 function FolderDetail() {
   const { folderId } = Route.useParams();
-  const [notice, setNotice] = useState("");
+  const { classId, folderName } = Route.useSearch();
+  const [query, setQuery] = useState("");
+  const resourcesQuery = useClassResources(classId, folderId);
+  const overviewQuery = useClassOverview(classId);
+  const resources = resourcesQuery.data;
 
-  const title = formatFolderTitle(folderId);
-  const { subfolders, bigImage, wideImage, smallImages, video } = getFolderContents(folderId);
-
-  const showNotice = (message: string) => {
-    setNotice(message);
-    window.clearTimeout((showNotice as unknown as { _t?: number })._t);
-    (showNotice as unknown as { _t?: number })._t = window.setTimeout(() => setNotice(""), 3000);
+  const title = folderName ?? formatFolderTitle(folderId);
+  const subfolders: Subfolder[] = (resources?.folders ?? []).map((folder) => ({ id: folder.id, title: folder.name, files: `${folder.file_count} ${folder.file_count === 1 ? "file" : "files"}`, size: folder.size_bytes < 1024 * 1024 ? `${Math.round(folder.size_bytes / 1024)} KB` : `${(folder.size_bytes / (1024 * 1024)).toFixed(1)} MB`, faded: false }));
+  const files = (resources?.files ?? []).filter((file) => file.name.toLowerCase().includes(query.toLowerCase()));
+  const handleUpload = async (file: File) => {
+    if (!classId) return;
+    try { await uploadClassFile(classId, file, folderId); toast.success(`Added "${file.name}"`); }
+    catch (error) { toast.error(error instanceof Error ? error.message : "We couldn't upload this file."); }
   };
-
-  const handleUpload = (file: File) => {
-    showNotice(`Added "${file.name}"`);
-  };
-
-  const handleNewFolder = (name: string) => {
-    showNotice(`Created folder "${name}"`);
+  const handleNewFolder = async (name: string) => {
+    if (!classId) return;
+    try { await createClassFolder(classId, name, folderId); toast.success(`Created folder "${name}"`); }
+    catch (error) { toast.error(error instanceof Error ? error.message : "We couldn't create this folder."); }
   };
 
   return (
@@ -272,47 +169,48 @@ function FolderDetail() {
               <div className="flex min-w-0 items-center gap-3">
                 <BackButton />
               </div>
-              <SearchButton />
+              <label className="search-field w-44">
+                <span className="sr-only">Search folder files</span>
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search file..." className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70" />
+                <Search size={20} className="text-muted-foreground" />
+              </label>
             </div>
 
             <div className="mt-5 flex items-center justify-between gap-3">
-              <Breadcrumb current={title} />
+              <Breadcrumb course={overviewQuery.data?.courseCode} current={title} />
               <FilterButton />
             </div>
           </header>
 
-          <div className="px-7 pt-5">
+          {classId ? <div className="px-7 pt-5">
             <div className="section-heading flex items-center justify-between">
               <h2 className="m-0 leading-none">Folders</h2>
               <MoreButton label="More folder options" />
             </div>
             <div className="mt-3 grid grid-cols-2 gap-4">
               {subfolders.map((folder) => (
-                <SubfolderCard key={folder.id} {...folder} />
+                <SubfolderCard key={folder.id} {...folder} classId={classId} isTeacher={overviewQuery.data?.myRole === "teacher"} />
               ))}
             </div>
 
             <div className="section-heading mt-6 flex items-center justify-between">
-              <h2 className="m-0 leading-none">Images</h2>
-              <MoreButton label="More image options" />
-            </div>
-            <div className="mt-3">
-              <ImagesGrid bigImage={bigImage} wideImage={wideImage} smallImages={smallImages} />
-            </div>
-
-            <div className="section-heading mt-6 flex items-center justify-between">
-              <h2 className="m-0 leading-none">Videos</h2>
-              <MoreButton label="More video options" />
+              <h2 className="m-0 leading-none">Files</h2>
+              <MoreButton label="More file options" />
             </div>
             <div className="mt-3 pb-24">
-              <VideoTile video={video} />
+              {files.length ? files.map((file) => {
+                const Icon = file.mime.startsWith("video/") ? Video : FileText;
+                return <div key={file.id} role="button" tabIndex={0} onClick={() => void openClassFile(file.path).catch((error) => toast.error(error instanceof Error ? error.message : "We couldn't open this file."))} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void openClassFile(file.path).catch((error) => toast.error(error instanceof Error ? error.message : "We couldn't open this file.")); }} className="recent-file w-full text-left"><div className="file-icon-wrap"><Icon size={22} className="text-storage-blue" /></div><div className="min-w-0 flex-1"><h3 className="truncate text-sm font-medium text-foreground">{file.name}</h3><p className="mt-0.5 text-[10px] text-muted-foreground">{new Date(file.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</p></div><ResourceActionMenu classId={classId} id={file.id} kind="file" name={file.name} path={file.path} isTeacher={overviewQuery.data?.myRole === "teacher"} /></div>;
+              }) : <p className="py-8 text-center text-sm text-muted-foreground">No files in this folder</p>}
             </div>
           </div>
-          {notice && <div className="upload-notice">{notice}</div>}
+          : <p className="px-7 py-12 text-center text-sm text-muted-foreground">Open a class to view its files.</p>}
+          {resourcesQuery.isPending && classId && <div className="upload-notice">Loading files…</div>}
+          {resourcesQuery.isError && <div className="upload-notice">We couldn't load these files.</div>}
         </section>
       </div>
 
-      <FileFloatingActionButton onUpload={handleUpload} onNewFolder={handleNewFolder} />
+      {classId && <FileFloatingActionButton onUpload={handleUpload} onNewFolder={handleNewFolder} />}
     </main>
   );
 }

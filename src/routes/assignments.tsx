@@ -62,7 +62,7 @@ function AssignmentsRoute() {
   const assignments: Assignment[] = (workQuery.data ?? [])
     .filter((item) => item.type === "Assignment")
     .map((item) => ({ id: item.id, title: item.title, type: "homework", dueAt: item.dueAt, points: item.points ?? 0, status: "todo", attachments: item.attachmentCount, submitted: item.submitted, total: item.total }));
-  return <AssignmentsPage role={overviewQuery.data?.myRole === "teacher" ? "instructor" : "student"} classCode={overviewQuery.data?.courseCode ?? "Your class"} courseName={overviewQuery.data?.name ?? "Assignments"} assignments={assignments} onBack={() => router.history.back()} />;
+  return <AssignmentsPage role={overviewQuery.data?.myRole === "teacher" ? "instructor" : "student"} classCode={overviewQuery.data?.courseCode ?? "Your class"} courseName={overviewQuery.data?.name ?? "Assignments"} assignments={assignments} onBack={() => router.history.back()} onOpenAssignment={(assignment) => void router.navigate({ to: "/work", search: { classId: classId ?? "", workId: assignment.id } })} />;
 }
 
 /* -------------------------------------------------------------------------- */

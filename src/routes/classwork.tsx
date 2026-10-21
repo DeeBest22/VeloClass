@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import {
   ArrowLeft,
@@ -72,6 +72,7 @@ const resume = { title: "Lecture 5 - Dry Friction", weekLabel: "Week 3", page: 1
 const resumePercent = Math.round((resume.page / resume.totalPages) * 100);
 
 function Classwork() {
+  const router = useRouter();
   const { user } = useAuth();
   const { classId: searchedClassId } = Route.useSearch();
   const classId = searchedClassId ?? getLastOpenedClassId(user?.id);
@@ -266,6 +267,7 @@ function Classwork() {
                     <li key={it.id}>
                       <button
                         type="button"
+                        onClick={() => void router.navigate({ to: "/work", search: { classId: classId ?? "", workId: it.id } })}
                         className="flex w-full items-center gap-4 py-4 text-left transition-opacity active:opacity-60"
                       >
                         <span className={`grid size-12 shrink-0 place-items-center rounded-2xl ${tint}`}>
