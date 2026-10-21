@@ -1,8 +1,6 @@
-import { useEffect, useRef, useCallback, useState } from "react";
-import { io, Socket } from "socket.io-client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { supabase } from "@/integrations/client";
 import type { WhiteboardElement } from "./types";
-
-const API_BASE_URL = "https://convospace-backend.onrender.com";
 
 export interface CollabUser {
   id: string;
@@ -32,6 +30,9 @@ export interface CollabIdentity {
   email?: string;
   profilePicture?: string | null;
 }
+
+const COLORS = ["#e03131", "#2f9e44", "#1971c2", "#f08c00", "#7048e8", "#0c8599", "#e64980"];
+const colorOf = (id: string) => COLORS[[...id].reduce((a, c) => a + c.charCodeAt(0), 0) % COLORS.length] ?? "#1971c2";
 
 type Op =
   | { type: "add";    objectId: string; objectData: WhiteboardElement }
@@ -78,192 +79,137 @@ function applyOpToMap(map: Map<string, WhiteboardElement>, op: Op) {
 }
 
 export function useCollaboration(
-  roomId: string,
+  roomId: string | undefined,
   setElements: React.Dispatch<React.SetStateAction<WhiteboardElement[]>>,
   identity?: CollabIdentity | null,
 ) {
-  const socketRef      = useRef<Socket | null>(null);
-  const serverMapRef   = useRef<Map<string, WhiteboardElement>>(new Map());
-  const lastSentMapRef = useRef<Map<string, WhiteboardElement>>(new Map());
-  const versionRef     = useRef(0);
-  const applyingRemote = useRef(false);
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const lastSent = useRef<Map<string, WhiteboardElement>>(new Map()); // what everyone already has
+  const pending = useRef<WhiteboardElement[] | null>(null);
+  const latest = useRef<WhiteboardElement[]>([]);
+  const cursor = useRef<{ x: number; y: number } | null>(null);
+  const cursorDirty = useRef(false);
+  const gotState = useRef(false);
+  const timer = useRef<number | undefined>(undefined);
+  const saveTimer = useRef<number | undefined>(undefined);
+  const idRef = useRef(identity);
+  idRef.current = identity;
+  const roomRef = useRef(roomId);
+  roomRef.current = roomId;
+  const me = identity?.id;
 
-  // Keep latest values in refs so callbacks never capture stale closures
-  const roomIdRef    = useRef(roomId);
-  const identityRef  = useRef(identity);
-  roomIdRef.current   = roomId;
-  identityRef.current = identity;
+  const [connected, setConnected] = useState(false);
+  const [users, setUsers] = useState<CollabUser[]>([]);
+  const [cursors, setCursors] = useState<Record<string, RemoteCursor>>({});
 
-  // currentRoom in a ref so syncElements reads it without needing to be recreated
-  const currentRoomRef = useRef<string | null>(null);
-
-  const [connected,   setConnected]   = useState(false);
-  const [currentRoom, setCurrentRoom] = useState<string | null>(null);
-  const [users,       setUsers]       = useState<CollabUser[]>([]);
-  const [self,        setSelf]        = useState<CollabUser | null>(null);
-  const [cursors,     setCursors]     = useState<Record<string, RemoteCursor>>({});
-
-  const buildUserInfo = () => {
-    const id = identityRef.current;
-    if (!id) return null;
-    const boardTitle = new URLSearchParams(window.location.search).get("name");
-    return {
-      id: id.id,
-      name: id.name,
-      firstName: id.firstName ?? id.name.split(" ")[0],
-      email: id.email ?? null,
-      profilePicture: id.profilePicture ?? null,
-      boardTitle: boardTitle ? decodeURIComponent(boardTitle) : null,
-    };
-  };
-
-  // Generation counter: incremented every time we push remote state into React.
-  // syncElements checks this to skip sending back changes that came from remote.
-  const remoteGenRef     = useRef(0);
-  const lastSyncedGenRef = useRef(0);
-
-  const flushToCanvas = useCallback(() => {
-    const els = Array.from(serverMapRef.current.values());
-    remoteGenRef.current += 1;          // mark this as a remote-origin update
-    applyingRemote.current = true;
-    setElements(els);
-    // Keep applyingRemote true for two frames so the syncElements effect that
-    // fires after setElements can see it reliably.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => { applyingRemote.current = false; });
+  /* Someone else changed the board: merge their changes into ours without echoing them back. */
+  const applyRemote = useCallback((ops: Op[]) => {
+    ops.forEach((o) => applyOpToMap(lastSent.current, o));
+    setElements((prev) => {
+      const m = new Map(prev.map((e) => [e.id, e] as const));
+      ops.forEach((o) => applyOpToMap(m, o));
+      return [...m.values()];
     });
   }, [setElements]);
 
-  // Socket setup — runs ONCE. All dynamic values read from refs.
+  const load = useCallback((els: WhiteboardElement[]) => {
+    if (latest.current.length === 0) {
+      lastSent.current = toMap(els);
+      setElements(els);
+    } else applyRemote(els.map((el) => ({ type: "add", objectId: el.id, objectData: el }) as Op));
+  }, [setElements, applyRemote]);
+
+  const save = useCallback(() => {
+    saveTimer.current = undefined;
+    if (!roomRef.current) return;
+    void (supabase as any).rpc("save_class_whiteboard", { p_class_id: roomRef.current, p_elements: latest.current.filter((e) => !e.isDeleted) });
+  }, []);
+
+  /* At most one message every 120ms: our changes since last time plus our pointer position. */
+  const flush = useCallback(() => {
+    timer.current = undefined;
+    const channel = channelRef.current;
+    const id = idRef.current;
+    if (!channel || !id) return;
+    const ops: Op[] = [];
+    if (pending.current) {
+      const next = toMap(pending.current);
+      ops.push(...diff(lastSent.current, next));
+      lastSent.current = next;
+      pending.current = null;
+    }
+    const cur = cursorDirty.current ? cursor.current : null;
+    cursorDirty.current = false;
+    if (!ops.length && !cur) return;
+    void channel.send({ type: "broadcast", event: "wb", payload: { from: id.id, name: id.name, firstName: id.firstName ?? null, pic: id.profilePicture ?? null, ops, cursor: cur } });
+    if (ops.length) {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = window.setTimeout(save, 2500);
+    }
+  }, [save]);
+
+  const kick = () => { if (timer.current === undefined) timer.current = window.setTimeout(flush, 120); };
+
   useEffect(() => {
-    const socket = io(API_BASE_URL, {
-      transports: ["websocket"],
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-    });
-    socketRef.current = socket;
-
-    const doJoin = () => {
-      socket.emit("whiteboard:join", {
-        roomId: roomIdRef.current,
-        userInfo: buildUserInfo(),
+    if (!roomId || !me) return;
+    gotState.current = false;
+    const channel = supabase.channel(`whiteboard:${roomId}`, { config: { presence: { key: me } } });
+    channelRef.current = channel;
+    channel
+      .on("presence", { event: "sync" }, () => {
+        const st = channel.presenceState<{ name: string; firstName: string | null; pic: string | null }>();
+        setUsers((Object.entries(st) as [string, { name: string; firstName: string | null; pic: string | null }[]][]).map(([uid, metas]) => ({ id: uid, name: metas[0]?.name ?? "Member", firstName: metas[0]?.firstName ?? null, email: null, profilePicture: metas[0]?.pic ?? null, color: colorOf(uid), cursor: null, status: "active" as const })));
+        setCursors((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => k in st)));
+      })
+      .on("broadcast", { event: "wb" }, ({ payload }: { payload: any }) => {
+        if (payload.from === me) return;
+        if (payload.ops?.length) applyRemote(payload.ops);
+        if (payload.cursor) setCursors((p) => ({ ...p, [payload.from]: { userId: payload.from, name: payload.name ?? "Member", firstName: payload.firstName ?? null, profilePicture: payload.pic ?? null, color: colorOf(payload.from), x: payload.cursor.x, y: payload.cursor.y } }));
+      })
+      .on("broadcast", { event: "wb-hello" }, ({ payload }: { payload: any }) => {
+        // a newcomer asks for the live board; the member with the smallest id answers
+        const ids = Object.keys(channel.presenceState()).filter((k) => k !== payload.from).sort();
+        if (ids[0] !== me) return;
+        void channel.send({ type: "broadcast", event: "wb-state", payload: { to: payload.from, elements: [...toMap(latest.current).values()] } });
+      })
+      .on("broadcast", { event: "wb-state" }, ({ payload }: { payload: any }) => {
+        if (payload.to !== me || gotState.current) return;
+        gotState.current = true;
+        load(payload.elements as WhiteboardElement[]);
+      })
+      .subscribe(async (status: string) => {
+        if (status !== "SUBSCRIBED") { setConnected(false); return; }
+        setConnected(true);
+        const id = idRef.current;
+        await channel.track({ name: id?.name ?? "Member", firstName: id?.firstName ?? null, pic: id?.profilePicture ?? null });
+        const { data } = await (supabase as any).rpc("get_class_whiteboard", { p_class_id: roomId });
+        if (!gotState.current && Array.isArray(data) && data.length) load(data as WhiteboardElement[]);
+        void channel.send({ type: "broadcast", event: "wb-hello", payload: { from: me } });
       });
-    };
-
-    socket.on("connect", () => { setConnected(true); doJoin(); });
-
-    socket.on("disconnect", () => {
-      setConnected(false);
-      currentRoomRef.current = null;
-      setCursors({});
-    });
-
-    socket.on("whiteboard:init", ({ roomId: rid, version, objects, users: us, self: s }) => {
-      versionRef.current = version;
-      currentRoomRef.current = rid;
-      setCurrentRoom(rid);
-      setUsers(us);
-      setSelf(s);
-      const map = serverMapRef.current;
-      map.clear();
-      for (const obj of Object.values(objects) as WhiteboardElement[]) map.set(obj.id, obj);
-      lastSentMapRef.current = new Map(map);
-      flushToCanvas();
-    });
-
-    socket.on("whiteboard:op_ack", ({ op, version, sourceSocketId }) => {
-      versionRef.current = version;
-      if (sourceSocketId === socket.id) return;
-      applyOpToMap(serverMapRef.current, op);
-      lastSentMapRef.current = new Map(serverMapRef.current);
-      flushToCanvas();
-    });
-
-    socket.on("whiteboard:resync", ({ version, objects }) => {
-      versionRef.current = version;
-      const map = serverMapRef.current;
-      map.clear();
-      for (const obj of Object.values(objects) as WhiteboardElement[]) map.set(obj.id, obj);
-      lastSentMapRef.current = new Map(map);
-      flushToCanvas();
-    });
-
-    socket.on("whiteboard:user_joined", ({ user }) => {
-      setUsers(prev => [...prev.filter(u => u.id !== user.id), user]);
-    });
-    socket.on("whiteboard:user_left", ({ userId }) => {
-      setUsers(prev => prev.filter(u => u.id !== userId));
-      setCursors(prev => { const n = { ...prev }; delete n[userId]; return n; });
-    });
-    socket.on("whiteboard:user_status", ({ userId, status }) => {
-      setUsers(prev => prev.map(u => u.id === userId ? { ...u, status } : u));
-    });
-    socket.on("whiteboard:cursor", ({ userId, x, y, color, name, firstName, profilePicture }) => {
-      setCursors(prev => ({
-        ...prev,
-        [userId]: { userId, x, y, color, name, firstName: firstName ?? null, profilePicture: profilePicture ?? null },
-      }));
-    });
-    socket.on("whiteboard:error", ({ message }) => console.warn("[Collab] server error:", message));
-
     return () => {
-      socket.disconnect();
-      socketRef.current = null;
-      currentRoomRef.current = null;
+      window.clearTimeout(timer.current);
+      timer.current = undefined;
+      if (saveTimer.current !== undefined) { window.clearTimeout(saveTimer.current); save(); }
+      channelRef.current = null;
+      setConnected(false);
+      void supabase.removeChannel(channel);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // intentionally empty — all values read from refs
+  }, [roomId, me, applyRemote, load, save]);
 
-  // Re-join when identity resolves after socket connected (auth loads async)
-  const prevIdentityId = useRef<string | null | undefined>(undefined);
-  useEffect(() => {
-    const newId = identity?.id ?? null;
-    if (prevIdentityId.current === undefined) { prevIdentityId.current = newId; return; }
-    if (prevIdentityId.current === newId) return;
-    prevIdentityId.current = newId;
-    if (socketRef.current?.connected) {
-      socketRef.current.emit("whiteboard:join", {
-        roomId: roomIdRef.current,
-        userInfo: buildUserInfo(),
-      });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity?.id]);
-
-  // Sync local → server. Zero deps — reads everything from refs, never stale.
   const syncElements = useCallback((localElements: WhiteboardElement[]) => {
-    // Skip if we are currently applying a remote update OR if the generation
-    // has advanced since the last sync (meaning setElements was just called
-    // with remote data and React hasn't re-rendered the effect yet).
-    if (applyingRemote.current) return;
-    if (remoteGenRef.current !== lastSyncedGenRef.current) {
-      lastSyncedGenRef.current = remoteGenRef.current;
-      return;
-    }
-    const socket = socketRef.current;
-    if (!socket?.connected || !currentRoomRef.current) return;
+    latest.current = localElements;
+    if (!channelRef.current) return;
+    pending.current = localElements;
+    kick();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flush]);
 
-    const nextMap = toMap(localElements);
-    const ops = diff(lastSentMapRef.current, nextMap);
-    if (ops.length === 0) return;
-
-    lastSentMapRef.current = new Map(nextMap);
-    serverMapRef.current   = new Map(nextMap);
-
-    if (ops.length === 1) {
-      socket.emit("whiteboard:op", { op: ops[0], clientVersion: versionRef.current });
-    } else {
-      socket.emit("whiteboard:batch", { ops, clientVersion: versionRef.current });
-    }
-  }, []);
-
-  const cursorThrottle = useRef(0);
   const sendCursor = useCallback((x: number, y: number) => {
-    const now = Date.now();
-    if (now - cursorThrottle.current < 40) return;
-    cursorThrottle.current = now;
-    socketRef.current?.emit("whiteboard:cursor", { x, y });
-  }, []);
+    cursor.current = { x, y };
+    cursorDirty.current = true;
+    if (channelRef.current) kick();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flush]);
 
-  return { connected, roomId: currentRoom, users, self, cursors, syncElements, sendCursor };
+  return { connected, roomId: roomId ?? null, users, self: users.find((u) => u.id === me) ?? null, cursors, syncElements, sendCursor };
 }

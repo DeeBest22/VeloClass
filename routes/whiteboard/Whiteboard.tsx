@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useWhiteboard } from "./components/whiteboard/useWhiteboard";
+import { useCollaboration } from "./components/whiteboard/useCollaboration";
+import CollabCursors from "./components/whiteboard/CollabCursors";
+import { screenToScene } from "./components/whiteboard/math";
+import { profileFromUser, useAuth } from "@/lib/auth";
 import WhiteboardCanvas from "./components/whiteboard/WhiteboardCanvas";
 import Toolbar from "./components/whiteboard/Toolbar";
 import StylePanel from "./components/whiteboard/StylePanel";
@@ -13,14 +17,20 @@ import "./whiteboard.css";
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface WhiteboardProps {
+  classId?: string | undefined;
   /** Keeps the board inside the live-class stage instead of covering the page. */
   embedded?: boolean;
   /** Used by hosts that provide a dedicated return action. */
   onClose?: () => void;
 }
 
-export function Whiteboard({ embedded = false, onClose }: WhiteboardProps) {
+export function Whiteboard({ embedded = false, onClose, classId }: WhiteboardProps) {
   const wb = useWhiteboard();
+  const { user } = useAuth();
+  const profile = user ? profileFromUser(user) : null;
+  const collab = useCollaboration(classId, wb.setElements, profile ? { id: profile.id, name: profile.name, firstName: profile.firstName, profilePicture: profile.avatarUrl ?? null } : null);
+  const { syncElements } = collab;
+  useEffect(() => { syncElements(wb.elements); }, [wb.elements, syncElements]);
   const rootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [clickModeActive, setClickModeActive] = useState(false);
@@ -105,6 +115,13 @@ export function Whiteboard({ embedded = false, onClose }: WhiteboardProps) {
   const isLineTool = wb.activeTool === "line" || wb.activeTool === "arrow";
 
   // ─────────────────────────────────────────────────────────────────────────
+  const moveWithCursor = (e: Parameters<typeof wrappedPointerMove>[0]) => {
+    wrappedPointerMove(e);
+    const r = e.currentTarget.getBoundingClientRect();
+    const sc = screenToScene(e.clientX - r.left, e.clientY - r.top, wb.viewport);
+    collab.sendCursor(sc.x, sc.y);
+  };
+
   return (
     <div
       ref={rootRef}
@@ -133,12 +150,13 @@ export function Whiteboard({ embedded = false, onClose }: WhiteboardProps) {
         isPanning={wb.isPanning}
         editingTextId={wb.editingTextId}
         onPointerDown={wrappedPointerDown}
-        onPointerMove={wrappedPointerMove}
+        onPointerMove={moveWithCursor}
         onPointerUp={wrappedPointerUp}
         onWheel={wb.onWheel}
         updateTextElement={wb.updateTextElement}
         finishTextEdit={wb.finishTextEdit}
       />
+      <CollabCursors cursors={collab.cursors} viewport={wb.viewport} />
 
       {/* ── Click-mode hint pill ── */}
       {isLineTool && clickModeActive && (

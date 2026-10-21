@@ -15,7 +15,7 @@ import {
   MoreHorizontal,
   Pencil,
   RefreshCw,
-  Radio,
+  Video,
   Trash2,
   Users,
 } from "lucide-react";
@@ -397,6 +397,7 @@ function TeacherClass() {
                   hint={joinCode ?? undefined}
                   onClick={copyJoinCode}
                 />
+                <MenuItem icon={Video} label="Start live class" onClick={() => void router.navigate({ to: "/live-class", search: { classId } })} />
                 <MenuItem
                   icon={RefreshCw}
                   label="Regenerate join code"
@@ -462,13 +463,6 @@ function TeacherClass() {
               </span>
             )}
           </div>
-          <Link
-            to="/live-class"
-            search={{ classId: overview.id }}
-            className="mt-4 inline-flex h-10 items-center gap-2 rounded-full bg-feature px-4 text-[13px] font-bold text-white transition-transform active:scale-95"
-          >
-            <Radio className="h-4 w-4" /> Start live class
-          </Link>
 
       
         </section>

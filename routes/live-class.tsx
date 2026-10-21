@@ -1,5 +1,11 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/client";
+import { useAuth } from "@/lib/auth";
+import { getLastOpenedClassId, useClassOverview } from "@/lib/classes";
+import { LiveCall } from "@/lib/live-call";
+import { getLiveMembers, getLiveMessages, liveFileUrl, postLiveMessage, uploadLiveFile, type LiveMessage } from "@/lib/live-class";
 import {
   ChevronLeft,
   MessageSquareText,
@@ -30,16 +36,12 @@ import {
   Gauge,
   Megaphone,
 } from "lucide-react";
+import lecturerPic from "@/assets/avatars/lecturer.png";
+import seyiPic from "@/assets/avatars/seyi.png";
 import Whiteboard from "./whiteboard/Whiteboard";
-import { useAuth } from "@/lib/auth";
-import { isClassId, useClassOverview } from "@/lib/classes";
-import { getLiveMembers, getLiveMessages, liveFileUrl, postLiveMessage, uploadLiveFile, type LiveMember, type LiveMessage } from "@/lib/live-class";
-import { supabase } from "@/integrations/client";
-import { uploadClassFile } from "@/lib/class-files";
-import { createAnnouncement } from "@/lib/announcements";
 
 export const Route = createFileRoute("/live-class")({
-  validateSearch: (search: Record<string, unknown>): { classId?: string } => typeof search.classId === "string" ? { classId: search.classId } : {},
+  validateSearch: (q: Record<string, unknown>): { classId?: string } => (typeof q["classId"] === "string" ? { classId: q["classId"] } : {}),
   head: () => ({
     meta: [
       { title: "Live class | Classroom" },
@@ -65,62 +67,105 @@ const LINE = "rgba(0,0,0,0.07)";
 const SHADOW = "0 10px 30px rgba(20,22,31,0.08)";
 const CHIP = "#ECEAF4";
 const FIELD = "#F4F3F8";
-const uid = () => crypto.randomUUID();
-const nowLabel = () => new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
 /*
   One adaptive screen. Replace with your real role.
   Instructor: Message / Announcement composer and "End".
   Student: plain message composer and "Leave".
 */
-type Person = { id: string; name: string; pic?: string; role?: "teacher" | "student" };
+
+type Person = { id: string; name: string; pic: string };
+
+/* Filled from the class roster on every render (see LiveClassPage). */
+let MY_ID = "";
+let PEOPLE: Person[] = []; // members currently in the live class
+let MEMBERS: Person[] = []; // everyone in the class (for message authors)
+const resolveId = (id: string) => (id === MY_ID ? "me" : id);
+const personOf = (id: string): Person => {
+  const r = resolveId(id);
+  return PEOPLE.find((p) => p.id === r) ?? MEMBERS.find((p) => p.id === r) ?? { id, name: "Member", pic: seyiPic };
+};
 
 type Content =
   | { kind: "text"; text: string }
-  | { kind: "voice"; length: string; src?: string }
-  | { kind: "doc"; name: string; size: string; path?: string }
+  | { kind: "voice"; length: string; path?: string | null }
+  | { kind: "doc"; name: string; size: string; path?: string | null }
   | { kind: "sketch"; src: string }
   | { kind: "announce"; title: string; body: string; important: boolean; replies: number; unread: boolean };
-type Msg = { id: string; from: string; fromName: string; fromAvatar?: string; time: string } & Content;
+type Msg = { id: string; from: string; time: string } & Content;
 type Announce = Extract<Msg, { kind: "announce" }>;
 
+const fmtSize = (b: number) => (b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+const toMsg = (r: LiveMessage): Msg => {
+  const base = { id: r.id, from: r.sender_id, time: new Date(r.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) };
+  if (r.kind === "announcement") return { ...base, kind: "announce", title: r.title ?? "", body: r.body ?? "", important: r.important, replies: 0, unread: false };
+  if (r.kind === "file") return { ...base, kind: "doc", name: r.file_name ?? "File", size: fmtSize(r.file_size ?? 0), path: r.storage_path };
+  if (r.kind === "sketch") return { ...base, kind: "sketch", src: r.body ?? "" };
+  if (r.kind === "voice") return { ...base, kind: "voice", length: r.body ?? "0:00", path: r.storage_path };
+  return { ...base, kind: "text", text: r.body ?? "" };
+};
+
+const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+const nowLabel = () => new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
 /* ---------- small parts ---------- */
 function Avatar({ p, size, ring, gap = CANVAS }: { p: Person; size: number; ring?: boolean; gap?: string }) {
-  const initials = p.name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?";
   return (
-    p.pic ? <img src={p.pic} alt={p.name} draggable={false} className="shrink-0 rounded-full object-cover transition-shadow duration-200" style={{ width: size, height: size, backgroundColor: ACCENT_SOFT, boxShadow: ring ? `0 0 0 3px ${gap}, 0 0 0 5px ${ACCENT}` : "none" }} />
-      : <span aria-label={p.name} className="grid shrink-0 place-items-center rounded-full font-bold" style={{ width: size, height: size, backgroundColor: ACCENT_SOFT, color: ACCENT, fontSize: Math.max(11, size * .34), boxShadow: ring ? `0 0 0 3px ${gap}, 0 0 0 5px ${ACCENT}` : "none" }}>{initials}</span>
+    <img
+      src={p.pic}
+      alt={p.name}
+      draggable={false}
+      className="shrink-0 rounded-full object-cover transition-shadow duration-200"
+      style={{
+        width: size,
+        height: size,
+        backgroundColor: ACCENT_SOFT,
+        boxShadow: ring ? `0 0 0 3px ${gap}, 0 0 0 5px ${ACCENT}` : "none",
+      }}
+    />
   );
 }
 
-function Wave({ color }: { color: string }) {
+function Wave({ color, progress = 0 }: { color: string; progress?: number }) {
   return (
     <div className="flex h-5 flex-1 items-center gap-[2px]">
       {Array.from({ length: 20 }).map((_, i) => (
-        <span key={i} className="w-[3px] rounded-full" style={{ height: 5 + Math.abs(Math.sin(i * 1.7)) * 13, backgroundColor: color, opacity: 0.75 }} />
+        <span key={i} className="w-[3px] rounded-full" style={{ height: 5 + Math.abs(Math.sin(i * 1.7)) * 13, backgroundColor: color, opacity: progress > 0 ? (i < progress * 20 ? 1 : 0.4) : 0.75 }} />
       ))}
     </div>
   );
 }
 
-function VoiceBubble({ length, mine, src }: { length: string; mine: boolean; src?: string }) {
+function VoiceBubble({ length, mine, path }: { length: string; mine: boolean; path?: string | null | undefined }) {
   const [playing, setPlaying] = useState(false);
-  const audio = useRef<HTMLAudioElement>(null);
+  const [pct, setPct] = useState(0);
+  const audio = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => () => audio.current?.pause(), []);
+  async function toggle() {
+    if (!path) return;
+    if (!audio.current) {
+      try {
+        const a = new Audio(await liveFileUrl(path));
+        a.ontimeupdate = () => setPct(a.duration ? a.currentTime / a.duration : 0);
+        a.onended = () => { setPlaying(false); setPct(0); };
+        audio.current = a;
+      } catch { return; }
+    }
+    if (audio.current.paused) { await audio.current.play().catch(() => {}); setPlaying(true); } else { audio.current.pause(); setPlaying(false); }
+  }
   const fg = mine ? "white" : ACCENT;
   return (
-    <div className="flex min-w-[190px] items-center gap-2.5">
+    <div className="flex w-[200px] max-w-full items-center gap-2.5">
       <button
         aria-label={playing ? "Pause voice note" : "Play voice note"}
-        onClick={() => { if (!src) return; if (playing) audio.current?.pause(); else void audio.current?.play(); setPlaying((v) => !v); }}
+        onClick={() => void toggle()}
         className="grid h-8 w-8 shrink-0 place-items-center rounded-full"
         style={{ backgroundColor: mine ? "rgba(255,255,255,0.22)" : ACCENT_SOFT, color: fg }}
       >
         {playing ? <Pause className="h-3.5 w-3.5" fill="currentColor" /> : <Play className="h-3.5 w-3.5" fill="currentColor" />}
       </button>
-      {src && <audio ref={audio} src={src} onEnded={() => setPlaying(false)} className="hidden" />}
-      <Wave color={fg} />
+      <Wave color={fg} progress={pct} />
       <span className="text-[11px] font-semibold tabular-nums" style={{ color: mine ? "rgba(255,255,255,0.85)" : INK_SOFT }}>
         {length}
       </span>
@@ -139,9 +184,9 @@ function FileIcon({ tag }: { tag: string }) {
   return <FileGeneric className={cls} strokeWidth={1.5} style={{ color: INK_SOFT }} />;
 }
 
-function DocBubble({ name, size, mine, path }: { name: string; size: string; mine: boolean; path?: string }) {
+function DocBubble({ name, size, mine }: { name: string; size: string; mine: boolean }) {
   return (
-    <button onClick={() => path && void liveFileUrl(path).then((url) => window.open(url, "_blank", "noopener"))} className="flex min-w-[190px] items-center gap-2.5 text-left">
+    <div className="flex w-[220px] max-w-full items-center gap-2.5">
       <div
         className="grid h-10 w-9 shrink-0 place-items-center rounded-lg"
         style={{ backgroundColor: mine ? "rgba(255,255,255,0.22)" : ACCENT_SOFT, color: mine ? "white" : ACCENT }}
@@ -154,17 +199,18 @@ function DocBubble({ name, size, mine, path }: { name: string; size: string; min
           {size}
         </p>
       </div>
-    </button>
+    </div>
   );
 }
 
 /* Same format as the announcements screen */
-function AnnouncementCard({ m, person, mine }: { m: Announce; person: Person; mine: boolean }) {
-  const who = mine ? "You" : person.name;
+function AnnouncementCard({ m }: { m: Announce }) {
+  const p = personOf(m.from);
+  const who = p.id === "me" ? "You" : p.id === "ada" ? "Dr. Ada Bello" : p.name;
   return (
     <article className="rounded-3xl bg-white p-4" style={{ border: `1px solid ${LINE}`, boxShadow: SHADOW }}>
       <div className="flex items-center gap-3">
-        <Avatar p={person} size={40} gap="white" />
+        <Avatar p={p} size={40} gap="white" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[14px] font-bold leading-tight">{who}</p>
           <p className="text-[11.5px]" style={{ color: INK_SOFT }}>
@@ -372,11 +418,52 @@ const TABS: { id: Tab; label: string }[] = [
 
 function LiveClassPage() {
   const navigate = useNavigate();
-  const { classId } = Route.useSearch();
+  const { classId: sid } = Route.useSearch();
   const { user } = useAuth();
-  const overviewQuery = useClassOverview(classId);
-  const overview = overviewQuery.data;
+  const classId = sid ?? getLastOpenedClassId(user?.id) ?? undefined;
+  const qc = useQueryClient();
+  const overview = useClassOverview(classId).data;
   const isInstructor = overview?.myRole === "teacher";
+  const membersQ = useQuery({ queryKey: ["live-members", classId], enabled: !!classId, queryFn: () => getLiveMembers(classId!) });
+  const messagesQ = useQuery({ queryKey: ["live-messages", classId], enabled: !!classId, queryFn: () => getLiveMessages(classId!), refetchInterval: 10000 });
+  const [present, setPresent] = useState<string[]>([]);
+  const call = useRef<LiveCall | null>(null);
+  const micStream = useRef<MediaStream | null>(null);
+  const chan = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  useEffect(() => {
+    if (!classId || !user) return;
+    const ch = supabase.channel(`live-class:${classId}`, { config: { presence: { key: user.id } } });
+    const lc = new LiveCall(ch, user.id, setOthers);
+    call.current = lc;
+    const live = micStream.current?.getAudioTracks()[0];
+    if (live) lc.setMic(live);
+    ch.on("presence", { event: "sync" }, () => { const ids = Object.keys(ch.presenceState()); setPresent(ids); lc.sync(ids); })
+      .on("broadcast", { event: "rtc" }, ({ payload }: { payload: any }) => void lc.handle(payload))
+      .on("broadcast", { event: "changed" }, () => void qc.invalidateQueries({ queryKey: ["live-messages", classId] }))
+      .subscribe((st: string) => { if (st === "SUBSCRIBED") void ch.track({ at: Date.now() }); });
+    chan.current = ch;
+    return () => { chan.current = null; call.current = null; lc.close(); micStream.current?.getTracks().forEach((t) => t.stop()); micStream.current = null; void supabase.removeChannel(ch); };
+  }, [classId, user?.id, qc]);
+  MY_ID = user?.id ?? "";
+  const roster = membersQ.data ?? [];
+  const toPerson = (m: (typeof roster)[number]): Person => ({ id: m.id, name: m.name, pic: m.avatar_url ?? (m.role === "teacher" ? lecturerPic : seyiPic) });
+  MEMBERS = roster.map(toPerson);
+  PEOPLE = [
+    { id: "me", name: "You", pic: roster.find((m) => m.id === MY_ID)?.avatar_url ?? (isInstructor ? lecturerPic : seyiPic) },
+    ...roster.filter((m) => m.id !== MY_ID && present.includes(m.id)).map(toPerson),
+  ];
+  const msgs = useMemo(() => (messagesQ.data ?? []).map(toMsg), [messagesQ.data]);
+  const known = useRef<Set<string> | null>(null);
+  const fresh = useRef(new Set<string>());
+  if (known.current) for (const m of msgs) if (!known.current.has(m.id)) fresh.current.add(m.id);
+  useEffect(() => {
+    if (!messagesQ.data) return;
+    known.current = new Set(msgs.map((m) => m.id));
+    const ids = [...fresh.current];
+    if (!ids.length) return;
+    const t = setTimeout(() => ids.forEach((i) => fresh.current.delete(i)), 700);
+    return () => clearTimeout(t);
+  }, [msgs, messagesQ.data]);
 
   const [view, setView] = useState<"class" | "board">("class");
   // The section on screen lags behind `view` just long enough to play a smooth exit first.
@@ -433,9 +520,6 @@ function LiveClassPage() {
     if (el) setPill((p) => (p.l === el.offsetLeft && p.w === el.offsetWidth ? p : { l: el.offsetLeft, w: el.offsetWidth }));
   }, [shownTab]);
   const [others, setOthers] = useState<string[]>([]);
-  const [members, setMembers] = useState<Person[]>([]);
-  const [msgs, setMsgs] = useState<Msg[]>([]);
-  const [files, setFiles] = useState<{ id: string; name: string; by: string; size: string; tag: string }[]>([]);
   const [unread, setUnread] = useState(2);
   const [compose, setCompose] = useState<"message" | "announcement">("message");
   const [draft, setDraft] = useState("");
@@ -445,19 +529,9 @@ function LiveClassPage() {
   const [recording, setRecording] = useState(false);
   const [recSecs, setRecSecs] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const peersRef = useRef(new Map<string, RTCPeerConnection>());
-  const signalSince = useRef(new Date(0).toISOString());
-  const processedSignals = useRef(new Set<string>());
-  const audioNodes = useRef(new Map<string, HTMLAudioElement>());
-  const roomChannel = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const listEnd = useRef<HTMLDivElement>(null);
-  const memberById = new Map(members.map((member) => [member.id, member]));
-  const me: Person = memberById.get(user?.id ?? "") ?? { id: user?.id ?? "me", name: user?.user_metadata?.full_name as string || user?.email?.split("@")[0] || "You", pic: (user?.user_metadata?.avatar_url ?? user?.user_metadata?.picture) as string | undefined };
 
   useEffect(() => {
     if (!recording) return;
@@ -483,71 +557,32 @@ function LiveClassPage() {
     if (box) box.scrollTop = box.scrollHeight;
   }, [shownTab]);
 
-  useEffect(() => {
-    if (!isClassId(classId)) return;
-    const channel = supabase.channel(`class-live:${classId}`);
-    roomChannel.current = channel;
-    channel.on("broadcast", { event: "live-message" }, ({ payload }) => {
-      const message = payload as Msg;
-      setMsgs((current) => current.some((item) => item.id === message.id) ? current : [...current, message]);
-      if (message.kind === "doc") setFiles((current) => current.some((item) => item.id === message.id) ? current : [{ id: message.id, name: message.name, by: message.fromName, size: message.size, tag: (message.name.split(".").pop() ?? "FILE").toUpperCase() }, ...current]);
-    }).subscribe();
-    return () => { roomChannel.current = null; void supabase.removeChannel(channel); };
-  }, [classId]);
 
-  const publishLiveMessage = (message: Msg) => {
-    setMsgs((current) => current.some((item) => item.id === message.id) ? current : [...current, message]);
-    if (message.kind === "doc") setFiles((current) => [{ id: message.id, name: message.name, by: message.fromName, size: message.size, tag: (message.name.split(".").pop() ?? "FILE").toUpperCase() }, ...current]);
-    void roomChannel.current?.send({ type: "broadcast", event: "live-message", payload: message });
-  };
-
-  useEffect(() => {
-    if (!isClassId(classId)) return;
-    let active = true;
-    void getLiveMembers(classId).then((data) => { if (active) setMembers(data.map((member: LiveMember) => ({ id: member.id, name: member.name, pic: member.avatar_url ?? undefined, role: member.role }))); }).catch((error) => { if (active) setToast(error instanceof Error ? error.message : "Couldn't load class members."); });
-    return () => { active = false; };
-  }, [classId]);
-
-  const toMsg = async (m: LiveMessage): Promise<Msg> => {
-    const time = new Date(m.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    const from = m.sender_id;
-    const author = memberById.get(m.sender_id);
-    const identity = { fromName: author?.name ?? m.sender_name, fromAvatar: author?.pic };
-    if (m.kind === "announcement") return { id: m.id, from, time, ...identity, kind: "announce", title: m.title ?? "Announcement", body: m.body ?? "", important: m.important, replies: 0, unread: false };
-    if (m.kind === "text") return { id: m.id, from, time, ...identity, kind: "text", text: m.body ?? "" };
-    if (m.kind === "sketch") return { id: m.id, from, time, ...identity, kind: "sketch", src: m.storage_path ? await liveFileUrl(m.storage_path) : "" };
-    const size = m.file_size ? (m.file_size > 1048576 ? `${(m.file_size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(m.file_size / 1024))} KB`) : "Audio";
-    if (m.kind === "voice") return { id: m.id, from, time, ...identity, kind: "voice", length: "Voice note", src: m.storage_path ? await liveFileUrl(m.storage_path) : undefined };
-    return { id: m.id, from, time, ...identity, kind: "doc", name: m.file_name ?? "Shared file", size, path: m.storage_path ?? undefined };
-  };
-
-  useEffect(() => {
-    if (!isClassId(classId)) return;
-    let active = true;
-    const load = async () => {
-      try {
-        const data = await getLiveMessages(classId);
-        const next = await Promise.all(data.map(toMsg));
-        if (active) {
-          setMsgs(next);
-          setFiles(data.filter((m) => m.kind === "file").map((m) => ({ id: m.id, name: m.file_name ?? "Shared file", by: m.sender_name, size: m.file_size ? `${Math.max(1, Math.round(m.file_size / 1024))} KB` : "", tag: (m.file_name?.split(".").pop() ?? "FILE").toUpperCase() })));
-        }
-      } catch (error) { if (active) setToast(error instanceof Error ? error.message : "Couldn't load live class."); }
-    };
-    void load();
-    const interval = window.setInterval(() => void load(), 2500);
-    return () => { active = false; window.clearInterval(interval); };
-  }, [classId, user?.id, members]);
-
-  const speaking = [...(micOn ? [me.id] : []), ...others];
-  const mainId = micOn ? me.id : speaking[0];
-  const main = mainId ? (memberById.get(mainId) ?? (mainId === me.id ? me : undefined)) : null;
-  const mainName = main ? (main.id === me.id ? "You" : main.name) : "Quiet for now";
+  const speaking = [...new Set([...(micOn ? ["me"] : []), ...others])];
+  const teacherId = roster.find((m) => m.role === "teacher")?.id;
+  const mainId = micOn && isInstructor ? "me" : teacherId && others.includes(teacherId) ? teacherId : speaking[0];
+  const main = mainId ? personOf(mainId) : null;
+  const talkingNow = !!main && others.includes(main.id);
+  const mainName = main ? (main.id === "me" ? "You" : main.name) : "Quiet for now";
   const mainLabel = !main
     ? "No one is speaking"
-    : main.id === me.id
+    : main.id === "me"
       ? "Your mic is on"
-      : main.role === "teacher" ? "Instructor speaking" : "Speaking";
+      : main.id === teacherId
+        ? "Instructor speaking"
+        : "Speaking";
+
+  const post = async (v: Parameters<typeof postLiveMessage>[1]) => {
+    if (!classId) { setToast("Open a class first"); return false; }
+    try {
+      await postLiveMessage(classId, v);
+      void qc.invalidateQueries({ queryKey: ["live-messages", classId] });
+      void chan.current?.send({ type: "broadcast", event: "changed", payload: {} });
+      return true;
+    } catch (e) { setToast((e as Error).message); return false; }
+  };
+  const openShared = (path?: string | null) => { if (path) liveFileUrl(path).then((u) => window.open(u, "_blank", "noopener")).catch((e) => setToast(e.message)); };
+  const files = msgs.flatMap((m) => (m.kind === "doc" ? [{ id: m.id, name: m.name, by: personOf(m.from).id === "me" ? "You" : personOf(m.from).name, size: m.size, tag: (m.name.split(".").pop() ?? "FILE").slice(0, 3).toUpperCase(), path: m.path }] : [])).reverse();
 
   function openSheet(t: Tab) {
     setSheet(t);
@@ -559,72 +594,25 @@ function LiveClassPage() {
     setSketchOpen(false);
   }
 
-  const sendSignal = async (recipient: string | null, signal: unknown) => {
-    if (!classId) return;
-    const { error } = await (supabase as any).rpc("send_live_class_signal", { p_class_id: classId, p_recipient_id: recipient, p_signal: signal });
-    if (error) throw error;
-  };
-
-  // Let a member receive existing speakers as soon as they enter the room;
-  // listening never asks for microphone permission.
-  useEffect(() => {
-    if (isClassId(classId) && user) void sendSignal(null, { type: "listen" }).catch(() => {});
-  }, [classId, user?.id]);
-  const getPeer = (peerId: string) => {
-    let pc = peersRef.current.get(peerId);
-    if (pc) return pc;
-    const turnUrl = import.meta.env["VITE_TURN_URL"] as string | undefined;
-    pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }, ...(turnUrl ? [{ urls: turnUrl, username: import.meta.env["VITE_TURN_USERNAME"], credential: import.meta.env["VITE_TURN_CREDENTIAL"] }] : [])] });
-    streamRef.current?.getTracks().forEach((track) => pc?.addTrack(track, streamRef.current!));
-    pc.onicecandidate = (event) => { if (event.candidate) void sendSignal(peerId, { type: "ice", candidate: event.candidate.toJSON() }); };
-    pc.ontrack = (event) => {
-      const audio = new Audio(); audio.autoplay = true; audio.srcObject = event.streams[0]; audioNodes.current.set(peerId, audio); void audio.play().catch(() => {});
-      setOthers((current) => current.includes(peerId) ? current : [...current, peerId]);
-    };
-    pc.onconnectionstatechange = () => { if (["failed", "closed", "disconnected"].includes(pc!.connectionState)) { pc?.close(); peersRef.current.delete(peerId); audioNodes.current.get(peerId)?.remove(); audioNodes.current.delete(peerId); setOthers((current) => current.filter((id) => id !== peerId)); } };
-    peersRef.current.set(peerId, pc);
-    return pc;
-  };
-
-  useEffect(() => {
-    if (!isClassId(classId) || !user) return;
-    let active = true;
-    const poll = async () => {
-      const { data, error } = await (supabase as any).rpc("pull_live_class_signals", { p_class_id: classId, p_after: signalSince.current });
-      if (error || !active) return;
-      for (const row of data ?? []) {
-        if (processedSignals.current.has(row.id)) continue;
-        processedSignals.current.add(row.id);
-        signalSince.current = row.created_at > signalSince.current ? row.created_at : signalSince.current;
-        const signal = row.signal as { type: string; sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
-        try {
-          if ((signal.type === "join" || signal.type === "listen") && micOn) {
-            const pc = getPeer(row.sender_id); const offer = await pc.createOffer(); await pc.setLocalDescription(offer); await sendSignal(row.sender_id, { type: "offer", sdp: offer });
-          } else if (signal.type === "offer") {
-            const pc = getPeer(row.sender_id); await pc.setRemoteDescription(signal.sdp!); const answer = await pc.createAnswer(); await pc.setLocalDescription(answer); await sendSignal(row.sender_id, { type: "answer", sdp: answer });
-          } else if (signal.type === "answer") await getPeer(row.sender_id).setRemoteDescription(signal.sdp!);
-          else if (signal.type === "ice" && signal.candidate) await getPeer(row.sender_id).addIceCandidate(signal.candidate);
-        } catch { /* a stale negotiation can be safely retried by toggling the mic */ }
-      }
-    };
-    void poll(); const interval = window.setInterval(() => void poll(), 1200);
-    return () => { active = false; window.clearInterval(interval); };
-  }, [classId, user?.id, micOn]);
-
-  useEffect(() => () => { streamRef.current?.getTracks().forEach((track) => track.stop()); peersRef.current.forEach((pc) => pc.close()); }, []);
-
   async function toggleMic() {
     if (micOn) {
-      streamRef.current?.getTracks().forEach((track) => track.stop()); streamRef.current = null; peersRef.current.forEach((pc) => pc.close()); peersRef.current.clear(); setOthers([]); setMicOn(false); setToast("Your mic is off"); return;
+      call.current?.setMic(null);
+      micStream.current?.getTracks().forEach((t) => t.stop());
+      micStream.current = null;
+      setMicOn(false);
+      setToast("Your mic is off");
+      return;
     }
     try {
-      streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
-      peersRef.current.forEach((pc) => pc.close()); peersRef.current.clear(); setOthers([]);
-      setMicOn(true); await sendSignal(null, { type: "join" }); setToast("Your mic is on");
-    } catch { setToast("Microphone permission is needed to speak."); }
+      const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      micStream.current = s;
+      call.current?.setMic(s.getAudioTracks()[0] ?? null);
+      setMicOn(true);
+      setToast("Your mic is on");
+    } catch { setToast("Allow microphone access to speak"); }
   }
 
-  async function send() {
+  function send() {
     const text = draft.trim();
     if (!text) return;
     if (compose === "announcement") {
@@ -632,54 +620,63 @@ function LiveClassPage() {
         setToast("Add a title first");
         return;
       }
-      if (!classId) return;
-      const message: Msg = { id: uid(), from: me.id, fromName: me.name, fromAvatar: me.pic, time: nowLabel(), kind: "announce", title: title.trim(), body: text, important, replies: 0, unread: false };
-      publishLiveMessage(message);
-      try { await createAnnouncement(classId, title.trim(), text, []); } catch { setToast("Announcement shared with everyone currently in class."); }
+      void post({ kind: "announcement", title: title.trim(), body: text, important });
       setTitle("");
       setImportant(false);
       setCompose("message");
       setSheet("announcements");
       setToast("Announcement posted");
     } else {
-      if (!classId) return;
-      const message: Msg = { id: uid(), from: me.id, fromName: me.name, fromAvatar: me.pic, time: nowLabel(), kind: "text", text };
-      publishLiveMessage(message);
-      try { await postLiveMessage(classId, { kind: "text", body: text }); } catch { setToast("Message shared with everyone currently in class."); }
+      void post({ kind: "text", body: text });
     }
     setDraft("");
   }
 
-  async function voiceOrSend() {
-    if (draft.trim()) return send();
-    if (!recording) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : undefined });
-        chunksRef.current = []; recorder.ondataavailable = (event) => event.data.size && chunksRef.current.push(event.data); recorderRef.current = recorder; recorder.start(); setRecording(true); setToast("Recording, tap again to send");
-      } catch { setToast("Microphone permission is needed to record."); }
-      return;
-    }
-    const recorder = recorderRef.current;
-    if (!recorder || !classId) return;
-    recorder.onstop = () => { void (async () => { try { const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" }); const path = await uploadLiveFile(classId, blob, `voice-note-${Date.now()}.webm`, blob.type); await postLiveMessage(classId, { kind: "voice", storage_path: path, file_name: "Voice note", file_size: blob.size, mime_type: blob.type }); } catch (error) { setToast(error instanceof Error ? error.message : "Couldn't send voice note."); } finally { recorder.stream.getTracks().forEach((track) => track.stop()); } })(); };
-    recorder.stop(); recorderRef.current = null;
+  const rec = useRef<{ mr: MediaRecorder; chunks: Blob[]; stream: MediaStream } | null>(null);
+  useEffect(() => () => rec.current?.stream.getTracks().forEach((t) => t.stop()), []);
+  async function startRec() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+      mr.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      mr.start();
+      rec.current = { mr, chunks, stream };
+      setRecording(true);
+    } catch { setToast("Allow microphone access to record"); }
+  }
+  function stopRec(sendIt: boolean) {
+    const r = rec.current;
+    if (!r) return;
+    rec.current = null;
+    const secs = recSecs;
+    const keep = sendIt && secs >= 1;
+    if (sendIt && !keep) setToast("Too short, hold a little longer");
+    r.mr.onstop = () => {
+      r.stream.getTracks().forEach((t) => t.stop());
+      if (!keep || !classId) return;
+      const type = ((r.mr.mimeType || "audio/webm").split(";")[0] ?? "audio/webm");
+      uploadLiveFile(classId, new Blob(r.chunks, { type }), `voice.${type.includes("mp4") ? "m4a" : "webm"}`, type)
+        .then((path) => post({ kind: "voice", body: mmss(secs), storage_path: path, mime_type: type }))
+        .catch((e) => setToast(e.message));
+    };
+    r.mr.stop();
     setRecording(false);
   }
 
-  async function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+  function voiceOrSend() {
+    if (draft.trim()) return send();
+    if (!recording) return void startRec();
+    stopRec(true);
+  }
+
+  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
-    const size = f.size > 1048576 ? `${(f.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1024))} KB`;
-    const ext = (f.name.split(".").pop() ?? "FILE").slice(0, 3).toUpperCase();
     if (!classId) return;
-    try {
-      const path = await uploadClassFile(classId, f);
-      const message: Msg = { id: uid(), from: me.id, fromName: me.name, fromAvatar: me.pic, time: nowLabel(), kind: "doc", name: f.name, size, path };
-      publishLiveMessage(message);
-      try { await postLiveMessage(classId, { kind: "file", storage_path: path, file_name: f.name, file_size: f.size, mime_type: f.type }); } catch { /* The class Files area remains the durable copy. */ }
-    } catch (error) { setToast(error instanceof Error ? error.message : "Couldn't share document."); return; }
-    setToast("Document shared");
+    void uploadLiveFile(classId, f, f.name).then((path) => post({ kind: "file", storage_path: path, file_name: f.name, file_size: f.size, mime_type: f.type }))
+      .then((ok) => { if (ok) setToast("Document shared"); }).catch((err) => setToast(err.message));
+    setToast("Sending file…");
     e.target.value = "";
     if (sheet === "files") return;
     openSheet("chat");
@@ -718,6 +715,9 @@ function LiveClassPage() {
         @keyframes lc-tab-r { from { opacity: 0; transform: translateX(28px) } to { opacity: 1; transform: none } }
         @keyframes lc-tab-l { from { opacity: 0; transform: translateX(-28px) } to { opacity: 1; transform: none } }
         @keyframes lc-pulse { 50% { opacity: .3 } }
+        @keyframes lc-msg { from { opacity: 0; transform: translateY(10px) scale(.97) } to { opacity: 1; transform: none } }
+        .lc-msg { animation: lc-msg 280ms cubic-bezier(.22,1,.36,1) both }
+        @media (prefers-reduced-motion: reduce) { .lc-msg { animation: none } }
         @keyframes lc-view-in { from { opacity: 0; transform: translate3d(var(--lc-dx), 0, 0) } to { opacity: 1; transform: none } }
         @keyframes lc-view-out { from { opacity: 1; transform: none } to { opacity: 0; transform: translate3d(calc(var(--lc-dx) * -0.6), 0, 0) } }
         @keyframes lc-menu-in { from { opacity: 0; transform: translate3d(var(--lc-dx), 0, 0) } to { opacity: 1; transform: none } }
@@ -726,13 +726,13 @@ function LiveClassPage() {
 
       {/* Top bar */}
       <header className="flex items-center gap-2.5 px-4 pb-2" style={{ paddingTop: "16px" }}>
-        <Link to="/class" search={classId ? { classId } : {}} aria-label="Back to class" className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-white" style={{ border: `1px solid ${LINE}` }}>
+        <Link to="/class" aria-label="Back to class" className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-white" style={{ border: `1px solid ${LINE}` }}>
           <ChevronLeft className="h-5 w-5" />
         </Link>
         <div className="min-w-0 flex-1">
           <p className="truncate text-[15px] font-bold leading-tight">{overview?.name ?? "Live class"}</p>
           <p className="truncate text-[11.5px]" style={{ color: INK_SOFT }}>
-            {isInstructor ? "You are teaching" : overview?.teacherName ?? "Teacher"} · {(overview?.studentCount ?? 0) + 1} in class
+            {isInstructor ? "You are teaching" : overview?.teacherName ?? "Your teacher"} · {PEOPLE.length} in class
           </p>
         </div>
         <button
@@ -866,8 +866,8 @@ function LiveClassPage() {
             <main className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden overscroll-none px-6">
               <div className="relative mb-5 grid h-[150px] w-[150px] place-items-center">
                 {main &&
-                  [0, 0.7, 1.4].map((d) => (
-                    <span key={d} className="lc-anim absolute inset-0 rounded-full" style={{ border: `2px solid ${ACCENT}`, opacity: 0, animation: `lc-ring 2.2s ${d}s infinite` }} />
+                  [0, 0.7, 1.4].map((d, i) => (
+                    <span key={d} className="lc-anim absolute inset-0 rounded-full transition-[transform,opacity] duration-300" style={{ border: `2px solid ${ACCENT}`, ...(talkingNow ? { opacity: 0, animation: `lc-ring 2.2s ${d}s infinite` } : { opacity: 0.45 - i * 0.15, transform: `scale(${0.85 + i * 0.2})` }) }} />
                   ))}
                 {main ? (
                   <Avatar p={main} size={104} />
@@ -881,8 +881,8 @@ function LiveClassPage() {
               <p className="mt-1.5 flex items-center gap-2 text-[13px]" style={{ color: INK_SOFT }}>
                 {main && (
                   <span className="inline-flex h-3.5 items-end gap-[2px]" aria-hidden>
-                    {[0, 0.15, 0.3, 0.45].map((d) => (
-                      <i key={d} className="lc-anim w-[3px] rounded-full" style={{ backgroundColor: ACCENT, height: 3, animation: `lc-bar .9s ${d}s infinite ease-in-out` }} />
+                    {[0, 0.15, 0.3, 0.45].map((d, i) => (
+                      <i key={d} className="lc-anim w-[3px] rounded-full transition-[height] duration-300" style={{ backgroundColor: ACCENT, height: [4, 10, 6, 12][i], ...(talkingNow ? { animation: `lc-bar .9s ${d}s infinite ease-in-out` } : {}) }} />
                     ))}
                   </span>
                 )}
@@ -898,8 +898,8 @@ function LiveClassPage() {
                 </span>
               </div>
               <div className="-mx-4 flex gap-3.5 overflow-x-auto px-5 pb-2 pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {members.map((p) => {
-                  const talking = speaking.includes(p.id);
+                {PEOPLE.map((p) => {
+                  const talking = others.includes(p.id);
                   return (
                     <div key={p.id} className="flex w-[54px] shrink-0 flex-col items-center gap-1.5">
                       <div className="relative">
@@ -919,7 +919,7 @@ function LiveClassPage() {
                 })}
                 <div className="flex w-[54px] shrink-0 flex-col items-center gap-1.5">
                   <span className="grid h-[50px] w-[50px] place-items-center rounded-full text-[13px] font-bold" style={{ backgroundColor: CHIP, color: INK_SOFT }}>
-                    +{Math.max(0, members.length - members.slice(0, 5).length)}
+                    +{Math.max(0, roster.length - PEOPLE.length)}
                   </span>
                   <span className="text-[11px] font-medium" style={{ color: INK_SOFT }}>
                     More
@@ -954,7 +954,7 @@ function LiveClassPage() {
             ? dockItem("Class", Users, () => setView("class"), { on: true })
             : dockItem("Board", Presentation, () => setView("board"))}
           <button
-            onClick={() => navigate({ to: "/class", search: classId ? { classId } : {} })}
+            onClick={() => navigate({ to: "/class" })}
             aria-label={isInstructor ? "End class" : "Leave class"}
             className="grid h-12 w-11 shrink-0 place-items-center rounded-full transition-all active:scale-90"
             style={{ color: "#FF7A5C" }}
@@ -1017,7 +1017,7 @@ function LiveClassPage() {
               {files.length} {files.length === 1 ? "file" : "files"} shared
             </p>
             {files.map((f, i) => (
-              <div key={f.id} className="flex items-center gap-3.5 py-3.5" style={{ borderTop: i === 0 ? "none" : `1px solid ${LINE}` }}>
+              <div key={f.id} className="flex cursor-pointer items-center gap-3.5 py-3.5" onClick={() => openShared(f.path)} style={{ borderTop: i === 0 ? "none" : `1px solid ${LINE}` }}>
                 <FileIcon tag={f.tag} />
                 <div className="min-w-0">
                   <p className="truncate text-[14px] font-semibold leading-snug">{f.name}</p>
@@ -1040,20 +1040,20 @@ function LiveClassPage() {
                 </p>
               )}
               {shown.map((m) => {
-                const p: Person = memberById.get(m.from) ?? { id: m.from, name: m.fromName, pic: m.fromAvatar };
-                const mine = p.id === me.id;
-                if (m.kind === "announce") return <AnnouncementCard key={m.id} m={m} person={p} mine={mine} />;
+                if (m.kind === "announce") return <div key={m.id} className={fresh.current.has(m.id) ? "lc-msg" : ""}><AnnouncementCard m={m} /></div>;
+                const p = personOf(m.from);
+                const mine = p.id === "me";
                 return (
-                  <div key={m.id} className={`flex max-w-[90%] gap-2 ${mine ? "flex-row-reverse self-end" : ""}`}>
+                  <div key={m.id} className={`flex min-w-0 max-w-[90%] gap-2 ${mine ? "flex-row-reverse self-end" : ""} ${fresh.current.has(m.id) ? "lc-msg" : ""}`}>
                     <div className="mt-5">
                       <Avatar p={p} size={28} />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <p className={`mb-1 text-[11px] ${mine ? "text-right" : ""}`} style={{ color: INK_SOFT }}>
                         <b style={{ color: INK }}>{mine ? "You" : p.name}</b> · {m.time}
                       </p>
                       <div
-                        className="px-3.5 py-2.5 text-[14px] leading-snug"
+                        className="max-w-full px-3.5 py-2.5 text-[14px] leading-snug [overflow-wrap:anywhere]"
                         style={{
                           backgroundColor: mine ? ACCENT : "white",
                           color: mine ? "white" : INK,
@@ -1062,8 +1062,8 @@ function LiveClassPage() {
                         }}
                       >
                         {m.kind === "text" && m.text}
-                        {m.kind === "voice" && <VoiceBubble length={m.length} mine={mine} src={m.src} />}
-                        {m.kind === "doc" && <DocBubble name={m.name} size={m.size} mine={mine} path={m.path} />}
+                        {m.kind === "voice" && <VoiceBubble length={m.length} mine={mine} path={m.path} />}
+                        {m.kind === "doc" && <div className="cursor-pointer" onClick={() => openShared(m.path)}><DocBubble name={m.name} size={m.size} mine={mine} /></div>}
                         {m.kind === "sketch" && <img src={m.src} alt="Sketch" className="w-[220px] rounded-xl bg-white" />}
                       </div>
                     </div>
@@ -1086,8 +1086,7 @@ function LiveClassPage() {
                   <div className="min-h-0 flex-1">
                     <DrawPad
                       onSend={(src) => {
-                        if (!classId) return;
-                        void (async () => { try { const response = await fetch(src); const blob = await response.blob(); const path = await uploadLiveFile(classId, blob, `sketch-${Date.now()}.png`, "image/png"); await postLiveMessage(classId, { kind: "sketch", storage_path: path, file_name: "Sketch", file_size: blob.size, mime_type: "image/png" }); } catch { setToast("Couldn't share sketch."); } })();
+                        void post({ kind: "sketch", body: src });
                         setSketchOpen(false);
                         setSheet("chat");
                       }}
@@ -1123,6 +1122,9 @@ function LiveClassPage() {
                     <span className="flex flex-1 items-center gap-2 text-[14px] font-semibold" style={{ color: FLAME }}>
                       <span className="lc-anim h-2 w-2 rounded-full" style={{ backgroundColor: FLAME, animation: "lc-pulse 1s infinite" }} />
                       Recording {mmss(recSecs)}
+                      <button onClick={() => stopRec(false)} aria-label="Cancel recording" className="ml-auto grid h-8 w-8 place-items-center rounded-full" style={{ color: INK_SOFT }}>
+                        <X className="h-4 w-4" />
+                      </button>
                     </span>
                   ) : (
                     <input
@@ -1166,4 +1168,4 @@ function LiveClassPage() {
       </div>
     </div>
   );
-}
+} 

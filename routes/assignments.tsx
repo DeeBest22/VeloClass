@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 
 import {
@@ -10,7 +10,6 @@ import {
   CircleAlert,
   CircleCheck,
   Clock,
-  EllipsisVertical,
   FlaskConical,
   FolderKanban,
   ListChecks,
@@ -27,6 +26,7 @@ import cardPurple from "@/assets/card-purple.png";
 import cardRed from "@/assets/card-red.png";
 import cardYellow from "@/assets/card-yellow.png";
 import cardGreen from "@/assets/card-green.png";
+import noActivityImage from "@/assets/no_activity.png";
 import { useAuth } from "@/lib/auth";
 import { getLastOpenedClassId, useClassOverview } from "@/lib/classes";
 import { useSharedWork } from "@/lib/teacher-work";
@@ -247,6 +247,20 @@ export function AssignmentsPage({
     return tab === "todo" ? list : [...list].reverse();
   }, [rows, tab, query]);
 
+  // Sliding underline: measure the active tab and glide the indicator to it.
+  const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
+  const [indicator, setIndicator] = useState({ left: 0, width: 0, animate: false });
+  useEffect(() => {
+    const measure = () => {
+      const el = tabRefs.current[tab];
+      if (!el) return;
+      setIndicator((prev) => ({ left: el.offsetLeft, width: el.offsetWidth, animate: prev.width > 0 }));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [tab, counts, isInstructor]);
+
   const tabs: { key: Tab; label: string }[] = [
     { key: "todo", label: isInstructor ? "Open" : "To do" },
     { key: "submitted", label: isInstructor ? "To grade" : "Submitted" },
@@ -265,20 +279,30 @@ export function AssignmentsPage({
             type="button"
             onClick={onBack ?? (() => window.history.back())}
             aria-label="Back to class"
-            className={`grid h-11 w-11 place-items-center rounded-[12px] border bg-white transition active:scale-95 ${FOCUS}`}
-            style={{ borderColor: RULE }}
+            className={`group grid h-10 w-10 place-items-center rounded-full bg-white shadow-[0_1px_2px_rgba(19,35,63,0.06),0_0_0_1px_rgba(19,35,63,0.07)] transition duration-200 hover:shadow-[0_6px_16px_-8px_rgba(19,35,63,0.3),0_0_0_1px_rgba(19,35,63,0.07)] active:scale-90 ${FOCUS}`}
           >
-            <ArrowLeft className="h-5 w-5" aria-hidden="true" />
+            <ArrowLeft
+              className="h-[18px] w-[18px] transition-transform duration-200 group-hover:-translate-x-0.5"
+              strokeWidth={1.9}
+              aria-hidden="true"
+            />
           </button>
           <button
             type="button"
             onClick={() => setSearchOpen((v) => !v)}
             aria-label={searchOpen ? "Close search" : "Search assignments"}
             aria-expanded={searchOpen}
-            className={`grid h-11 w-11 place-items-center rounded-[12px] border bg-white transition active:scale-95 ${FOCUS}`}
-            style={{ borderColor: RULE }}
+            className={`grid h-10 w-10 place-items-center rounded-full transition duration-200 active:scale-90 ${FOCUS} ${
+              searchOpen
+                ? "bg-[#13233F] text-white shadow-[0_6px_16px_-8px_rgba(19,35,63,0.6)]"
+                : "bg-white shadow-[0_1px_2px_rgba(19,35,63,0.06),0_0_0_1px_rgba(19,35,63,0.07)] hover:shadow-[0_6px_16px_-8px_rgba(19,35,63,0.3),0_0_0_1px_rgba(19,35,63,0.07)]"
+            }`}
           >
-            {searchOpen ? <X className="h-5 w-5" aria-hidden="true" /> : <Search className="h-5 w-5" aria-hidden="true" />}
+            {searchOpen ? (
+              <X className="h-[18px] w-[18px]" strokeWidth={1.9} aria-hidden="true" />
+            ) : (
+              <Search className="h-[18px] w-[18px]" strokeWidth={1.9} aria-hidden="true" />
+            )}
           </button>
         </div>
 
@@ -289,7 +313,7 @@ export function AssignmentsPage({
 
         {searchOpen && (
           <div
-            className="mt-4 flex items-center gap-2 rounded-[12px] border bg-white px-4 py-3"
+            className="mt-4 flex items-center gap-2 rounded-full border bg-white px-5 py-3"
             style={{ borderColor: RULE }}
           >
             <Search className="h-4 w-4 text-slate-400" aria-hidden="true" />
@@ -305,39 +329,62 @@ export function AssignmentsPage({
       </header>
 
       {/* Next deadline */}
-      <section className="mt-6 px-5" aria-label="Next deadline">
-        <Countdown hero={hero} now={now} isInstructor={isInstructor} onOpen={onOpenAssignment} />
-      </section>
+      {(hero || (!now && (assignments?.length ?? 0) > 0)) && (
+        <section className="mt-6 px-5" aria-label="Next deadline">
+          <Countdown hero={hero} now={now} isInstructor={isInstructor} onOpen={onOpenAssignment} />
+        </section>
+      )}
 
       {/* Tabs */}
-      <nav className="mt-7 flex gap-6 border-b px-5" style={{ borderColor: RULE }} role="tablist">
+      <nav className="relative mt-7 flex gap-6 border-b px-5" style={{ borderColor: RULE }} role="tablist">
         {tabs.map((t) => {
           const active = tab === t.key;
           return (
             <button
               key={t.key}
+              ref={(el) => {
+                tabRefs.current[t.key] = el;
+              }}
               type="button"
               role="tab"
               aria-selected={active}
               onClick={() => setTab(t.key)}
-              className={`relative -mb-px flex items-baseline gap-1.5 pb-3 text-[15px] transition ${FOCUS} ${
-                active ? "font-bold" : "font-medium text-slate-500"
+              className={`flex items-baseline gap-1.5 pb-3 text-[15px] font-semibold transition-colors duration-300 ${FOCUS} ${
+                active ? "text-[#13233F]" : "text-slate-400 hover:text-slate-600"
               }`}
-              style={{
-                borderBottom: `3px solid ${active ? INK : "transparent"}`,
-              }}
             >
               {t.label}
-              <span className="text-[12px] font-semibold tabular-nums text-slate-400">
+              <span
+                className={`text-[12px] font-semibold tabular-nums transition-colors duration-300 ${
+                  active ? "text-slate-500" : "text-slate-300"
+                }`}
+              >
                 {counts[t.key]}
               </span>
             </button>
           );
         })}
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-px left-0 h-[3px] rounded-full"
+          style={{
+            backgroundColor: INK,
+            width: indicator.width,
+            transform: `translateX(${indicator.left}px)`,
+            opacity: indicator.width ? 1 : 0,
+            transition: indicator.animate
+              ? "transform 420ms cubic-bezier(0.22, 1, 0.36, 1), width 420ms cubic-bezier(0.22, 1, 0.36, 1)"
+              : "none",
+          }}
+        />
       </nav>
 
       {/* Timeline */}
       <main className="px-5 pt-2">
+        <style>{`
+          @keyframes card-in { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
+          @media (prefers-reduced-motion: no-preference) { .card-in { animation: card-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both; } }
+        `}</style>
         {!now && (
           <div className="mt-6 grid grid-cols-2 gap-3.5" aria-hidden="true">
             {[0, 1, 2, 3].map((i) => (
@@ -346,12 +393,12 @@ export function AssignmentsPage({
           </div>
         )}
 
-        {now && visible.length === 0 && <Empty tab={tab} isInstructor={isInstructor} searching={!!query.trim()} />}
+        {now && visible.length === 0 && <Empty key={tab} tab={tab} isInstructor={isInstructor} searching={!!query.trim()} />}
 
         {now && visible.length > 0 && (
           <ul className="mt-6 grid grid-cols-2 gap-3.5" aria-label="Assignments">
             {visible.map((r, i) => (
-              <li key={r.id}>
+              <li key={r.id} className="card-in" style={{ animationDelay: `${Math.min(i, 7) * 45}ms` }}>
                 <AssignmentCard
                   r={r}
                   now={now}
@@ -368,10 +415,30 @@ export function AssignmentsPage({
           <button
             type="button"
             onClick={() => setTab("todo")}
-            className={`mt-8 w-full rounded-[12px] border px-4 py-3 text-left text-[13px] font-semibold ${FOCUS}`}
-            style={{ borderColor: LATE, color: LATE }}
+            className={`card-in group mt-8 flex w-full items-center gap-3.5 rounded-[22px] bg-white p-2.5 pr-3 text-left shadow-[0_1px_2px_rgba(19,35,63,0.05),0_0_0_1px_rgba(217,59,59,0.14)] transition duration-200 hover:shadow-[0_10px_24px_-14px_rgba(217,59,59,0.45),0_0_0_1px_rgba(217,59,59,0.22)] active:scale-[0.985] ${FOCUS}`}
           >
-            {overdueCount} overdue. Open your to do list.
+            <span
+              aria-hidden="true"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-full"
+              style={{ backgroundColor: "#FDECEA", color: LATE }}
+            >
+              <CircleAlert className="h-5 w-5" strokeWidth={1.9} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[14.5px] font-bold leading-tight">
+                {overdueCount} {overdueCount === 1 ? "assignment" : "assignments"} overdue
+              </span>
+              <span className="mt-0.5 block text-[12.5px]" style={{ color: "#5B6B85" }}>
+                Tap to view them in {tabs[0].label}
+              </span>
+            </span>
+            <span
+              aria-hidden="true"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full transition-transform duration-200 group-hover:translate-x-0.5"
+              style={{ backgroundColor: "#FDECEA", color: LATE }}
+            >
+              <ArrowRight className="h-4 w-4" strokeWidth={2} />
+            </span>
           </button>
         )}
       </main>
@@ -463,21 +530,27 @@ function Countdown({
     <article className="relative isolate h-[176px] overflow-hidden rounded-[18px] bg-[#4241B8] text-white shadow-[0_8px_22px_rgba(66,65,184,0.28)]">
       <HeroBackground />
 
-      <button
-        type="button"
-        aria-label="More assignment options"
-        className={`absolute right-3 top-3 z-20 grid h-8 w-8 place-items-center rounded-full bg-[#1E1D6B]/50 text-white backdrop-blur-sm transition active:scale-95 ${FOCUS}`}
-      >
-        <EllipsisVertical className="h-[18px] w-[18px]" aria-hidden="true" />
-      </button>
-
       <div className="relative z-10 flex h-full flex-col px-4 pb-4 pt-4">
-        <div
-          className={`inline-flex w-fit items-center gap-1.5 rounded-full py-1 pl-2 pr-2.5 text-[11px] font-extrabold leading-none tracking-wide ${badgeStyle}`}
-        >
-          <BadgeIcon className="h-3.5 w-3.5" strokeWidth={2.4} aria-hidden="true" />
-          {badgeText}
-        </div>
+        {hero.overdue ? (
+          <div className="inline-flex w-fit items-center gap-2 rounded-full bg-white/15 py-1.5 pl-2.5 pr-3 text-[11px] font-bold leading-none tracking-wide text-white ring-1 ring-inset ring-white/25 backdrop-blur-md">
+            <span className="relative flex h-2 w-2" aria-hidden="true">
+              <span className="absolute inline-flex h-full w-full rounded-full bg-[#FF8A7A] opacity-70 motion-safe:animate-ping" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-[#FF6B5E]" />
+            </span>
+            <span className="uppercase">Overdue</span>
+            <span className="h-3 w-px bg-white/30" aria-hidden="true" />
+            <span className="font-medium normal-case tracking-normal text-white/80">
+              {relative(hero.due, now).text}
+            </span>
+          </div>
+        ) : (
+          <div
+            className={`inline-flex w-fit items-center gap-1.5 rounded-full py-1 pl-2 pr-2.5 text-[11px] font-extrabold leading-none tracking-wide ${badgeStyle}`}
+          >
+            <BadgeIcon className="h-3.5 w-3.5" strokeWidth={2.4} aria-hidden="true" />
+            {badgeText}
+          </div>
+        )}
 
         <h2 className="mt-3 max-w-[58%] truncate text-[18px] font-bold leading-tight tracking-[-0.01em]">
           {hero.title === "Problem set 3: Newton's laws of motion" ? "Math Assignment 2" : hero.title}
@@ -643,24 +716,37 @@ function AssignmentCard({
 }
 
 function Empty({ tab, isInstructor, searching }: { tab: Tab; isInstructor: boolean; searching: boolean }) {
-  const copy = searching
-    ? ["No match", "Try a different word from the title."]
+  const { title, body } = searching
+    ? { title: "No match found", body: "Try a different word from the title." }
     : tab === "todo"
-      ? [
-          isInstructor ? "Nothing open" : "Nothing to do",
-          isInstructor ? "Create an assignment and it will show up here." : "New work from your instructor shows up here.",
-        ]
+      ? isInstructor
+        ? { title: "No open assignments", body: "Create one and it will show up here." }
+        : { title: "You're all caught up", body: "New assignments from your instructor will appear here." }
       : tab === "submitted"
-        ? [
-            isInstructor ? "Nothing to grade" : "Nothing submitted yet",
-            isInstructor ? "Submissions will land here as students hand in work." : "Work you hand in waits here until it is graded.",
-          ]
-        : ["No grades yet", "Scores appear here once work has been marked."];
+        ? isInstructor
+          ? { title: "Nothing to grade", body: "Submissions will land here as students hand in work." }
+          : { title: "Nothing submitted yet", body: "Work you hand in waits here until it is graded." }
+        : { title: "No grades yet", body: "Scores appear here once work has been marked." };
 
   return (
-    <div className="mt-10 border-l-4 pl-4" style={{ borderColor: SIGNAL }}>
-      <p className="text-[20px] font-extrabold tracking-tight">{copy[0]}</p>
-      <p className="mt-1 max-w-[18rem] text-[14px] text-slate-500">{copy[1]}</p>
+    <div className="empty-in mt-10 flex flex-col items-center text-center">
+      <style>{`
+        @keyframes empty-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+        @media (prefers-reduced-motion: no-preference) { .empty-in { animation: empty-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both; } }
+      `}</style>
+
+      <img
+        src={noActivityImage}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+        className="h-40 w-auto select-none object-contain"
+      />
+
+      <p className="mt-6 text-[19px] font-extrabold tracking-tight">{title}</p>
+      <p className="mt-1.5 max-w-[17rem] text-[13.5px] leading-relaxed" style={{ color: "#5B6B85" }}>
+        {body}
+      </p>
     </div>
   );
 }
