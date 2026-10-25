@@ -15,6 +15,7 @@ import {
   MoreHorizontal,
   Pencil,
   RefreshCw,
+  Video,
   Trash2,
   Users,
 } from "lucide-react";
@@ -396,6 +397,7 @@ function TeacherClass() {
                   hint={joinCode ?? undefined}
                   onClick={copyJoinCode}
                 />
+                <MenuItem icon={Video} label="Start live class" onClick={() => void router.navigate({ to: "/live-class", search: { classId } })} />
                 <MenuItem
                   icon={RefreshCw}
                   label="Regenerate join code"

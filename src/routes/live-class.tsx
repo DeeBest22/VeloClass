@@ -1,5 +1,11 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/client";
+import { useAuth } from "@/lib/auth";
+import { getLastOpenedClassId, useClassOverview } from "@/lib/classes";
+import { LiveCall } from "@/lib/live-call";
+import { getLiveMembers, getLiveMessages, liveFileUrl, postLiveMessage, uploadLiveFile, type LiveMessage } from "@/lib/live-class";
 import {
   ChevronLeft,
   MessageSquareText,
@@ -31,13 +37,11 @@ import {
   Megaphone,
 } from "lucide-react";
 import lecturerPic from "@/assets/avatars/lecturer.png";
-import chiomaPic from "@/assets/avatars/chioma.png";
-import taiwoPic from "@/assets/avatars/taiwo.png";
-import amakaPic from "@/assets/avatars/amaka.png";
 import seyiPic from "@/assets/avatars/seyi.png";
 import Whiteboard from "./whiteboard/Whiteboard";
 
 export const Route = createFileRoute("/live-class")({
+  validateSearch: (q: Record<string, unknown>): { classId?: string } => (typeof q["classId"] === "string" ? { classId: q["classId"] } : {}),
   head: () => ({
     meta: [
       { title: "Live class | Classroom" },
@@ -69,56 +73,37 @@ const FIELD = "#F4F3F8";
   Instructor: Message / Announcement composer and "End".
   Student: plain message composer and "Leave".
 */
-const ROLE: "student" | "instructor" = "instructor";
-const isInstructor = ROLE === "instructor";
 
 type Person = { id: string; name: string; pic: string };
 
-const ADA: Person = { id: "ada", name: "Dr. Bello", pic: lecturerPic };
-const OTHERS: Person[] = [
-  { id: "chioma", name: "Chioma", pic: chiomaPic },
-  { id: "taiwo", name: "Taiwo", pic: taiwoPic },
-  { id: "amaka", name: "Amaka", pic: amakaPic },
-  { id: "seyi", name: "Seyi", pic: seyiPic },
-];
-
-/* "You" wears the lecturer picture for instructors, and Seyi's picture for students. */
-const ME: Person = { id: "me", name: "You", pic: isInstructor ? lecturerPic : seyiPic };
-
-const PEOPLE: Person[] = [ME, ...(isInstructor ? [] : [ADA]), ...OTHERS.filter((p) => isInstructor || p.id !== "seyi")];
-
-/* Messages written as "ada" or "seyi" belong to "You" when that is your own picture. */
-const resolveId = (id: string) => ((id === "ada" && isInstructor) || (id === "seyi" && !isInstructor) ? "me" : id);
+/* Filled from the class roster on every render (see LiveClassPage). */
+let MY_ID = "";
+let PEOPLE: Person[] = []; // members currently in the live class
+let MEMBERS: Person[] = []; // everyone in the class (for message authors)
+const resolveId = (id: string) => (id === MY_ID ? "me" : id);
 const personOf = (id: string): Person => {
   const r = resolveId(id);
-  return PEOPLE.find((p) => p.id === r) ?? ME;
+  return PEOPLE.find((p) => p.id === r) ?? MEMBERS.find((p) => p.id === r) ?? { id, name: "Member", pic: seyiPic };
 };
 
 type Content =
   | { kind: "text"; text: string }
-  | { kind: "voice"; length: string }
-  | { kind: "doc"; name: string; size: string }
+  | { kind: "voice"; length: string; path?: string | null }
+  | { kind: "doc"; name: string; size: string; path?: string | null }
   | { kind: "sketch"; src: string }
   | { kind: "announce"; title: string; body: string; important: boolean; replies: number; unread: boolean };
 type Msg = { id: string; from: string; time: string } & Content;
 type Announce = Extract<Msg, { kind: "announce" }>;
 
-const SEED: Msg[] = [
-  {
-    id: "a1", from: "ada", time: "9:41 AM", kind: "announce", important: true, replies: 7, unread: true,
-    title: "Lab report moved to Friday",
-    body: "Today's lab report on substitution reactions is now due Friday at 5 PM. Attendance is being taken in this session.",
-  },
-  { id: "m1", from: "chioma", time: "10:02 AM", kind: "text", text: "Is the SN2 mechanism example in the slides?" },
-  { id: "m2", from: "ada", time: "10:03 AM", kind: "text", text: "Yes, slide 14. I shared the notes too." },
-  { id: "m3", from: "taiwo", time: "10:04 AM", kind: "doc", name: "Substitution_notes.pdf", size: "1.2 MB" },
-];
-
-const SEED_FILES = [
-  { id: "f1", name: "Lecture 6 slides.pptx", by: "Dr. Bello", size: "4.8 MB", tag: "PPT" },
-  { id: "f2", name: "Substitution_notes.pdf", by: "Taiwo", size: "1.2 MB", tag: "PDF" },
-  { id: "f3", name: "Worked examples.docx", by: "Chioma", size: "640 KB", tag: "DOC" },
-];
+const fmtSize = (b: number) => (b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+const toMsg = (r: LiveMessage): Msg => {
+  const base = { id: r.id, from: r.sender_id, time: new Date(r.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) };
+  if (r.kind === "announcement") return { ...base, kind: "announce", title: r.title ?? "", body: r.body ?? "", important: r.important, replies: 0, unread: false };
+  if (r.kind === "file") return { ...base, kind: "doc", name: r.file_name ?? "File", size: fmtSize(r.file_size ?? 0), path: r.storage_path };
+  if (r.kind === "sketch") return { ...base, kind: "sketch", src: r.body ?? "" };
+  if (r.kind === "voice") return { ...base, kind: "voice", length: r.body ?? "0:00", path: r.storage_path };
+  return { ...base, kind: "text", text: r.body ?? "" };
+};
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 const nowLabel = () => new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -142,30 +127,45 @@ function Avatar({ p, size, ring, gap = CANVAS }: { p: Person; size: number; ring
   );
 }
 
-function Wave({ color }: { color: string }) {
+function Wave({ color, progress = 0 }: { color: string; progress?: number }) {
   return (
     <div className="flex h-5 flex-1 items-center gap-[2px]">
       {Array.from({ length: 20 }).map((_, i) => (
-        <span key={i} className="w-[3px] rounded-full" style={{ height: 5 + Math.abs(Math.sin(i * 1.7)) * 13, backgroundColor: color, opacity: 0.75 }} />
+        <span key={i} className="w-[3px] rounded-full" style={{ height: 5 + Math.abs(Math.sin(i * 1.7)) * 13, backgroundColor: color, opacity: progress > 0 ? (i < progress * 20 ? 1 : 0.4) : 0.75 }} />
       ))}
     </div>
   );
 }
 
-function VoiceBubble({ length, mine }: { length: string; mine: boolean }) {
+function VoiceBubble({ length, mine, path }: { length: string; mine: boolean; path?: string | null | undefined }) {
   const [playing, setPlaying] = useState(false);
+  const [pct, setPct] = useState(0);
+  const audio = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => () => audio.current?.pause(), []);
+  async function toggle() {
+    if (!path) return;
+    if (!audio.current) {
+      try {
+        const a = new Audio(await liveFileUrl(path));
+        a.ontimeupdate = () => setPct(a.duration ? a.currentTime / a.duration : 0);
+        a.onended = () => { setPlaying(false); setPct(0); };
+        audio.current = a;
+      } catch { return; }
+    }
+    if (audio.current.paused) { await audio.current.play().catch(() => {}); setPlaying(true); } else { audio.current.pause(); setPlaying(false); }
+  }
   const fg = mine ? "white" : ACCENT;
   return (
-    <div className="flex min-w-[190px] items-center gap-2.5">
+    <div className="flex w-[200px] max-w-full items-center gap-2.5">
       <button
         aria-label={playing ? "Pause voice note" : "Play voice note"}
-        onClick={() => setPlaying((v) => !v)}
+        onClick={() => void toggle()}
         className="grid h-8 w-8 shrink-0 place-items-center rounded-full"
         style={{ backgroundColor: mine ? "rgba(255,255,255,0.22)" : ACCENT_SOFT, color: fg }}
       >
         {playing ? <Pause className="h-3.5 w-3.5" fill="currentColor" /> : <Play className="h-3.5 w-3.5" fill="currentColor" />}
       </button>
-      <Wave color={fg} />
+      <Wave color={fg} progress={pct} />
       <span className="text-[11px] font-semibold tabular-nums" style={{ color: mine ? "rgba(255,255,255,0.85)" : INK_SOFT }}>
         {length}
       </span>
@@ -186,7 +186,7 @@ function FileIcon({ tag }: { tag: string }) {
 
 function DocBubble({ name, size, mine }: { name: string; size: string; mine: boolean }) {
   return (
-    <div className="flex min-w-[190px] items-center gap-2.5">
+    <div className="flex w-[220px] max-w-full items-center gap-2.5">
       <div
         className="grid h-10 w-9 shrink-0 place-items-center rounded-lg"
         style={{ backgroundColor: mine ? "rgba(255,255,255,0.22)" : ACCENT_SOFT, color: mine ? "white" : ACCENT }}
@@ -418,6 +418,84 @@ const TABS: { id: Tab; label: string }[] = [
 
 function LiveClassPage() {
   const navigate = useNavigate();
+  const { classId: sid } = Route.useSearch();
+  const { user } = useAuth();
+  const classId = sid ?? getLastOpenedClassId(user?.id) ?? undefined;
+  const qc = useQueryClient();
+  const overview = useClassOverview(classId).data;
+  const isInstructor = overview?.myRole === "teacher";
+  const membersQ = useQuery({ queryKey: ["live-members", classId], enabled: !!classId, queryFn: () => getLiveMembers(classId!) });
+  const messagesQ = useQuery({ queryKey: ["live-messages", classId], enabled: !!classId, queryFn: () => getLiveMessages(classId!), refetchInterval: 10000 });
+  const [present, setPresent] = useState<string[]>([]);
+  const [hands, setHands] = useState<Record<string, number>>({}); // userId -> time they raised their hand
+  const handsRef = useRef<Record<string, number> | null>(null);
+  const myHand = useRef<number | null>(null);
+  const rosterRef = useRef<{ id: string; role: string }[]>([]);
+  const isInstrRef = useRef(false);
+  const call = useRef<LiveCall | null>(null);
+  const micStream = useRef<MediaStream | null>(null);
+  const chan = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  useEffect(() => {
+    if (!classId || !user) return;
+    const ch = supabase.channel(`live-class:${classId}`, { config: { presence: { key: user.id } } });
+    const syncHands = (st: Record<string, any[]>) => {
+      const next: Record<string, number> = {};
+      for (const [uid, metas] of Object.entries(st)) { const h = metas?.[metas.length - 1]?.hand; if (typeof h === "number") next[uid] = h; }
+      const seen = handsRef.current;
+      handsRef.current = next;
+      setHands(next);
+      if (!seen) return; // first sync after joining: don't announce hands that were already up
+      for (const uid of Object.keys(next)) {
+        if (uid === MY_ID || uid in seen) continue;
+        setToast(`${MEMBERS.find((p) => p.id === uid)?.name ?? "Someone"} raised their hand ✋`);
+        if (isInstrRef.current) navigator.vibrate?.(40);
+      }
+    };
+    const lc = new LiveCall(ch, user.id, setOthers);
+    call.current = lc;
+    const live = micStream.current?.getAudioTracks()[0];
+    if (live) lc.setMic(live);
+    ch.on("presence", { event: "sync" }, () => { const ids = Object.keys(ch.presenceState()); setPresent(ids); lc.sync(ids); syncHands(ch.presenceState()); })
+      .on("broadcast", { event: "rtc" }, ({ payload }: { payload: any }) => void lc.handle(payload))
+      .on("broadcast", { event: "changed" }, () => void qc.invalidateQueries({ queryKey: ["live-messages", classId] }))
+      .on("broadcast", { event: "hand" }, ({ payload }: { payload: any }) => {
+        if (rosterRef.current.find((m) => m.id === payload.from)?.role !== "teacher") return;
+        if ((payload.to !== "all" && payload.to !== MY_ID) || myHand.current === null) return;
+        myHand.current = null; setHandUp(false); void ch.track({ at: Date.now(), hand: null }); setToast("Your hand was lowered");
+      })
+      .subscribe((st: string) => { if (st === "SUBSCRIBED") void ch.track({ at: Date.now(), hand: myHand.current }); });
+    chan.current = ch;
+    return () => { chan.current = null; call.current = null; lc.close(); micStream.current?.getTracks().forEach((t) => t.stop()); micStream.current = null; void supabase.removeChannel(ch); };
+  }, [classId, user?.id, qc]);
+  MY_ID = user?.id ?? "";
+  const roster = membersQ.data ?? [];
+  rosterRef.current = roster; isInstrRef.current = isInstructor;
+  const setHand = (on: boolean) => {
+    myHand.current = on ? Date.now() : null;
+    setHandUp(on);
+    void chan.current?.track({ at: Date.now(), hand: myHand.current });
+    setToast(on ? "Hand raised ✋ everyone can see it" : "Hand lowered");
+  };
+  const lowerHand = (to: string) => void chan.current?.send({ type: "broadcast", event: "hand", payload: { from: MY_ID, to } });
+  const toPerson = (m: (typeof roster)[number]): Person => ({ id: m.id, name: m.name, pic: m.avatar_url ?? (m.role === "teacher" ? lecturerPic : seyiPic) });
+  MEMBERS = roster.map(toPerson);
+  const handList = Object.entries(hands).sort((a, b) => a[1] - b[1]).map(([id]) => ({ id, name: id === MY_ID ? "You" : MEMBERS.find((p) => p.id === id)?.name ?? "Member" }));
+  PEOPLE = [
+    { id: "me", name: "You", pic: roster.find((m) => m.id === MY_ID)?.avatar_url ?? (isInstructor ? lecturerPic : seyiPic) },
+    ...roster.filter((m) => m.id !== MY_ID && present.includes(m.id)).map(toPerson),
+  ];
+  const msgs = useMemo(() => (messagesQ.data ?? []).map(toMsg), [messagesQ.data]);
+  const known = useRef<Set<string> | null>(null);
+  const fresh = useRef(new Set<string>());
+  if (known.current) for (const m of msgs) if (!known.current.has(m.id)) fresh.current.add(m.id);
+  useEffect(() => {
+    if (!messagesQ.data) return;
+    known.current = new Set(msgs.map((m) => m.id));
+    const ids = [...fresh.current];
+    if (!ids.length) return;
+    const t = setTimeout(() => ids.forEach((i) => fresh.current.delete(i)), 700);
+    return () => clearTimeout(t);
+  }, [msgs, messagesQ.data]);
 
   const [view, setView] = useState<"class" | "board">("class");
   // The section on screen lags behind `view` just long enough to play a smooth exit first.
@@ -438,7 +516,7 @@ function LiveClassPage() {
     return () => clearTimeout(t);
   }, [view, shownView]);
   const [sheet, setSheet] = useState<Tab | null>(null);
-  const [micOn, setMicOn] = useState(isInstructor);
+  const [micOn, setMicOn] = useState(false);
   const [handUp, setHandUp] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [toolsView, setToolsView] = useState<"menu" | "pace">("menu");
@@ -473,9 +551,7 @@ function LiveClassPage() {
     const el = tabEls.current[shownTab];
     if (el) setPill((p) => (p.l === el.offsetLeft && p.w === el.offsetWidth ? p : { l: el.offsetLeft, w: el.offsetWidth }));
   }, [shownTab]);
-  const [others, setOthers] = useState<string[]>(isInstructor ? ["chioma"] : ["ada"]);
-  const [msgs, setMsgs] = useState<Msg[]>(SEED);
-  const [files, setFiles] = useState(SEED_FILES);
+  const [others, setOthers] = useState<string[]>([]);
   const [unread, setUnread] = useState(2);
   const [compose, setCompose] = useState<"message" | "announcement">("message");
   const [draft, setDraft] = useState("");
@@ -513,32 +589,32 @@ function LiveClassPage() {
     if (box) box.scrollTop = box.scrollHeight;
   }, [shownTab]);
 
-  /*
-    DEMO ONLY: randomly opens and closes other people's mics so the speaking states show.
-    Delete this effect and drive `others` from your audio layer's active-speaker events.
-  */
-  useEffect(() => {
-    const pool = PEOPLE.filter((p) => p.id !== "me").map((p) => p.id);
-    const t = setInterval(() => {
-      const id = pool[Math.floor(Math.random() * pool.length)];
-      setOthers((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : cur.length < 3 ? [...cur, id] : cur));
-    }, 2600);
-    return () => clearInterval(t);
-  }, []);
 
-  const speaking = [...(micOn ? ["me"] : []), ...others];
-  const mainId = micOn && isInstructor ? "me" : others.includes("ada") ? "ada" : speaking[0];
+  const speaking = [...new Set([...(micOn ? ["me"] : []), ...others])];
+  const teacherId = roster.find((m) => m.role === "teacher")?.id;
+  const mainId = micOn && isInstructor ? "me" : teacherId && others.includes(teacherId) ? teacherId : speaking[0];
   const main = mainId ? personOf(mainId) : null;
+  const talkingNow = !!main && others.includes(main.id);
   const mainName = main ? (main.id === "me" ? "You" : main.name) : "Quiet for now";
   const mainLabel = !main
     ? "No one is speaking"
     : main.id === "me"
       ? "Your mic is on"
-      : main.id === "ada"
+      : main.id === teacherId
         ? "Instructor speaking"
         : "Speaking";
 
-  const push = (c: Content) => setMsgs((cur) => [...cur, { id: uid(), from: "me", time: nowLabel(), ...c }]);
+  const post = async (v: Parameters<typeof postLiveMessage>[1]) => {
+    if (!classId) { setToast("Open a class first"); return false; }
+    try {
+      await postLiveMessage(classId, v);
+      void qc.invalidateQueries({ queryKey: ["live-messages", classId] });
+      void chan.current?.send({ type: "broadcast", event: "changed", payload: {} });
+      return true;
+    } catch (e) { setToast((e as Error).message); return false; }
+  };
+  const openShared = (path?: string | null) => { if (path) liveFileUrl(path).then((u) => window.open(u, "_blank", "noopener")).catch((e) => setToast(e.message)); };
+  const files = msgs.flatMap((m) => (m.kind === "doc" ? [{ id: m.id, name: m.name, by: personOf(m.from).id === "me" ? "You" : personOf(m.from).name, size: m.size, tag: (m.name.split(".").pop() ?? "FILE").slice(0, 3).toUpperCase(), path: m.path }] : [])).reverse();
 
   function openSheet(t: Tab) {
     setSheet(t);
@@ -550,9 +626,22 @@ function LiveClassPage() {
     setSketchOpen(false);
   }
 
-  function toggleMic() {
-    setMicOn((v) => !v);
-    setToast(micOn ? "Your mic is off" : "Your mic is on");
+  async function toggleMic() {
+    if (micOn) {
+      call.current?.setMic(null);
+      micStream.current?.getTracks().forEach((t) => t.stop());
+      micStream.current = null;
+      setMicOn(false);
+      setToast("Your mic is off");
+      return;
+    }
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      micStream.current = s;
+      call.current?.setMic(s.getAudioTracks()[0] ?? null);
+      setMicOn(true);
+      setToast("Your mic is on");
+    } catch { setToast("Allow microphone access to speak"); }
   }
 
   function send() {
@@ -563,38 +652,63 @@ function LiveClassPage() {
         setToast("Add a title first");
         return;
       }
-      push({ kind: "announce", title: title.trim(), body: text, important, replies: 0, unread: false });
+      void post({ kind: "announcement", title: title.trim(), body: text, important });
       setTitle("");
       setImportant(false);
       setCompose("message");
       setSheet("announcements");
       setToast("Announcement posted");
     } else {
-      push({ kind: "text", text });
+      void post({ kind: "text", body: text });
     }
     setDraft("");
   }
 
+  const rec = useRef<{ mr: MediaRecorder; chunks: Blob[]; stream: MediaStream } | null>(null);
+  useEffect(() => () => rec.current?.stream.getTracks().forEach((t) => t.stop()), []);
+  async function startRec() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+      mr.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      mr.start();
+      rec.current = { mr, chunks, stream };
+      setRecording(true);
+    } catch { setToast("Allow microphone access to record"); }
+  }
+  function stopRec(sendIt: boolean) {
+    const r = rec.current;
+    if (!r) return;
+    rec.current = null;
+    const secs = recSecs;
+    const keep = sendIt && secs >= 1;
+    if (sendIt && !keep) setToast("Too short, hold a little longer");
+    r.mr.onstop = () => {
+      r.stream.getTracks().forEach((t) => t.stop());
+      if (!keep || !classId) return;
+      const type = ((r.mr.mimeType || "audio/webm").split(";")[0] ?? "audio/webm");
+      uploadLiveFile(classId, new Blob(r.chunks, { type }), `voice.${type.includes("mp4") ? "m4a" : "webm"}`, type)
+        .then((path) => post({ kind: "voice", body: mmss(secs), storage_path: path, mime_type: type }))
+        .catch((e) => setToast(e.message));
+    };
+    r.mr.stop();
+    setRecording(false);
+  }
+
   function voiceOrSend() {
     if (draft.trim()) return send();
-    if (!recording) {
-      setRecording(true);
-      setToast("Recording, tap again to send");
-      return;
-    }
-    /* Plug MediaRecorder in here and upload the blob. */
-    push({ kind: "voice", length: mmss(recSecs) });
-    setRecording(false);
+    if (!recording) return void startRec();
+    stopRec(true);
   }
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
-    const size = f.size > 1048576 ? `${(f.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1024))} KB`;
-    const ext = (f.name.split(".").pop() ?? "FILE").slice(0, 3).toUpperCase();
-    push({ kind: "doc", name: f.name, size });
-    setFiles((cur) => [{ id: uid(), name: f.name, by: "You", size, tag: ext }, ...cur]);
-    setToast("Document shared");
+    if (!classId) return;
+    void uploadLiveFile(classId, f, f.name).then((path) => post({ kind: "file", storage_path: path, file_name: f.name, file_size: f.size, mime_type: f.type }))
+      .then((ok) => { if (ok) setToast("Document shared"); }).catch((err) => setToast(err.message));
+    setToast("Sending file…");
     e.target.value = "";
     if (sheet === "files") return;
     openSheet("chat");
@@ -633,6 +747,9 @@ function LiveClassPage() {
         @keyframes lc-tab-r { from { opacity: 0; transform: translateX(28px) } to { opacity: 1; transform: none } }
         @keyframes lc-tab-l { from { opacity: 0; transform: translateX(-28px) } to { opacity: 1; transform: none } }
         @keyframes lc-pulse { 50% { opacity: .3 } }
+        @keyframes lc-msg { from { opacity: 0; transform: translateY(10px) scale(.97) } to { opacity: 1; transform: none } }
+        .lc-msg { animation: lc-msg 280ms cubic-bezier(.22,1,.36,1) both }
+        @media (prefers-reduced-motion: reduce) { .lc-msg { animation: none } }
         @keyframes lc-view-in { from { opacity: 0; transform: translate3d(var(--lc-dx), 0, 0) } to { opacity: 1; transform: none } }
         @keyframes lc-view-out { from { opacity: 1; transform: none } to { opacity: 0; transform: translate3d(calc(var(--lc-dx) * -0.6), 0, 0) } }
         @keyframes lc-menu-in { from { opacity: 0; transform: translate3d(var(--lc-dx), 0, 0) } to { opacity: 1; transform: none } }
@@ -645,22 +762,22 @@ function LiveClassPage() {
           <ChevronLeft className="h-5 w-5" />
         </Link>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[15px] font-bold leading-tight">Organic Chemistry II</p>
+          <p className="truncate text-[15px] font-bold leading-tight">{overview?.name ?? "Live class"}</p>
           <p className="truncate text-[11.5px]" style={{ color: INK_SOFT }}>
-            {isInstructor ? "You are teaching" : "Dr. Ada Bello"} · 24 in class
+            {isInstructor ? "You are teaching" : overview?.teacherName ?? "Your teacher"} · {PEOPLE.length} in class
           </p>
         </div>
         <button
-          onClick={() => {
-            setHandUp((v) => !v);
-            setToast(handUp ? "Hand lowered" : "Hand raised");
-          }}
+          onClick={() => setHand(!handUp)}
           aria-pressed={handUp}
           aria-label={handUp ? "Lower hand" : "Raise hand"}
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl"
+          className="relative grid h-10 w-10 shrink-0 place-items-center rounded-2xl"
           style={{ backgroundColor: handUp ? ACCENT_SOFT : "white", color: handUp ? ACCENT : INK, border: `1px solid ${LINE}` }}
         >
           <Hand className="h-[18px] w-[18px]" />
+          {isInstructor && handList.length > 0 && (
+            <span className="absolute -right-1 -top-1 grid h-[18px] min-w-[18px] place-items-center rounded-full px-1 text-[10px] font-bold text-white" style={{ backgroundColor: "#E5484D" }}>{handList.length}</span>
+          )}
         </button>
         <div className="relative shrink-0">
           <button
@@ -768,7 +885,7 @@ function LiveClassPage() {
           >
             {/* Board sits inside a slim white mat with a hairline edge */}
             <div className="absolute inset-[5px] overflow-hidden rounded-[22px]">
-              <Whiteboard embedded />
+              <Whiteboard embedded classId={classId} />
             </div>
             <span
               className="pointer-events-none absolute inset-[5px] z-[1] rounded-[22px]"
@@ -781,8 +898,8 @@ function LiveClassPage() {
             <main className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden overscroll-none px-6">
               <div className="relative mb-5 grid h-[150px] w-[150px] place-items-center">
                 {main &&
-                  [0, 0.7, 1.4].map((d) => (
-                    <span key={d} className="lc-anim absolute inset-0 rounded-full" style={{ border: `2px solid ${ACCENT}`, opacity: 0, animation: `lc-ring 2.2s ${d}s infinite` }} />
+                  [0, 0.7, 1.4].map((d, i) => (
+                    <span key={d} className="lc-anim absolute inset-0 rounded-full transition-[transform,opacity] duration-300" style={{ border: `2px solid ${ACCENT}`, ...(talkingNow ? { opacity: 0, animation: `lc-ring 2.2s ${d}s infinite` } : { opacity: 0.45 - i * 0.15, transform: `scale(${0.85 + i * 0.2})` }) }} />
                   ))}
                 {main ? (
                   <Avatar p={main} size={104} />
@@ -796,8 +913,8 @@ function LiveClassPage() {
               <p className="mt-1.5 flex items-center gap-2 text-[13px]" style={{ color: INK_SOFT }}>
                 {main && (
                   <span className="inline-flex h-3.5 items-end gap-[2px]" aria-hidden>
-                    {[0, 0.15, 0.3, 0.45].map((d) => (
-                      <i key={d} className="lc-anim w-[3px] rounded-full" style={{ backgroundColor: ACCENT, height: 3, animation: `lc-bar .9s ${d}s infinite ease-in-out` }} />
+                    {[0, 0.15, 0.3, 0.45].map((d, i) => (
+                      <i key={d} className="lc-anim w-[3px] rounded-full transition-[height] duration-300" style={{ backgroundColor: ACCENT, height: [4, 10, 6, 12][i], ...(talkingNow ? { animation: `lc-bar .9s ${d}s infinite ease-in-out` } : {}) }} />
                     ))}
                   </span>
                 )}
@@ -812,13 +929,31 @@ function LiveClassPage() {
                   {speaking.length} {speaking.length === 1 ? "mic" : "mics"} on
                 </span>
               </div>
+              {handList.length > 0 && (
+                <div className="mb-2 rounded-2xl px-3 py-2" style={{ backgroundColor: ACCENT_SOFT, border: `1px solid ${LINE}` }}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] font-semibold" style={{ color: ACCENT }}>✋ {handList.length} raised {handList.length === 1 ? "hand" : "hands"}</span>
+                    {isInstructor && <button onClick={() => lowerHand("all")} className="text-[11.5px] font-semibold" style={{ color: ACCENT }}>Lower all</button>}
+                  </div>
+                  <ol className="mt-1 space-y-1">
+                    {handList.map((h, i) => (
+                      <li key={h.id} className="flex items-center justify-between text-[12.5px]" style={{ color: INK }}>
+                        <span className="truncate">{i + 1}. {h.name}</span>
+                        {isInstructor && h.id !== MY_ID && <button onClick={() => lowerHand(h.id)} className="ml-2 shrink-0 text-[11.5px] font-semibold" style={{ color: ACCENT }}>Lower</button>}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
               <div className="-mx-4 flex gap-3.5 overflow-x-auto px-5 pb-2 pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {PEOPLE.map((p) => {
-                  const talking = speaking.includes(p.id);
+                  const talking = others.includes(p.id);
+                  const up = (p.id === "me" ? MY_ID : p.id) in hands;
                   return (
                     <div key={p.id} className="flex w-[54px] shrink-0 flex-col items-center gap-1.5">
                       <div className="relative">
                         <Avatar p={p} size={50} ring={talking} />
+                        {up && <span className="absolute -right-1 -top-1 grid h-5 w-5 place-items-center rounded-full bg-white text-[12px]" style={{ border: `1px solid ${LINE}` }}>✋</span>}
                         <span
                           className="absolute -bottom-0.5 -right-1 grid h-[18px] w-[18px] place-items-center rounded-full bg-white"
                           style={{ color: talking ? GREEN : INK_SOFT, border: `1px solid ${LINE}` }}
@@ -834,7 +969,7 @@ function LiveClassPage() {
                 })}
                 <div className="flex w-[54px] shrink-0 flex-col items-center gap-1.5">
                   <span className="grid h-[50px] w-[50px] place-items-center rounded-full text-[13px] font-bold" style={{ backgroundColor: CHIP, color: INK_SOFT }}>
-                    +{24 - PEOPLE.length}
+                    +{Math.max(0, roster.length - PEOPLE.length)}
                   </span>
                   <span className="text-[11px] font-medium" style={{ color: INK_SOFT }}>
                     More
@@ -932,7 +1067,7 @@ function LiveClassPage() {
               {files.length} {files.length === 1 ? "file" : "files"} shared
             </p>
             {files.map((f, i) => (
-              <div key={f.id} className="flex items-center gap-3.5 py-3.5" style={{ borderTop: i === 0 ? "none" : `1px solid ${LINE}` }}>
+              <div key={f.id} className="flex cursor-pointer items-center gap-3.5 py-3.5" onClick={() => openShared(f.path)} style={{ borderTop: i === 0 ? "none" : `1px solid ${LINE}` }}>
                 <FileIcon tag={f.tag} />
                 <div className="min-w-0">
                   <p className="truncate text-[14px] font-semibold leading-snug">{f.name}</p>
@@ -955,20 +1090,20 @@ function LiveClassPage() {
                 </p>
               )}
               {shown.map((m) => {
-                if (m.kind === "announce") return <AnnouncementCard key={m.id} m={m} />;
+                if (m.kind === "announce") return <div key={m.id} className={fresh.current.has(m.id) ? "lc-msg" : ""}><AnnouncementCard m={m} /></div>;
                 const p = personOf(m.from);
                 const mine = p.id === "me";
                 return (
-                  <div key={m.id} className={`flex max-w-[90%] gap-2 ${mine ? "flex-row-reverse self-end" : ""}`}>
+                  <div key={m.id} className={`flex min-w-0 max-w-[90%] gap-2 ${mine ? "flex-row-reverse self-end" : ""} ${fresh.current.has(m.id) ? "lc-msg" : ""}`}>
                     <div className="mt-5">
                       <Avatar p={p} size={28} />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <p className={`mb-1 text-[11px] ${mine ? "text-right" : ""}`} style={{ color: INK_SOFT }}>
                         <b style={{ color: INK }}>{mine ? "You" : p.name}</b> · {m.time}
                       </p>
                       <div
-                        className="px-3.5 py-2.5 text-[14px] leading-snug"
+                        className="max-w-full px-3.5 py-2.5 text-[14px] leading-snug [overflow-wrap:anywhere]"
                         style={{
                           backgroundColor: mine ? ACCENT : "white",
                           color: mine ? "white" : INK,
@@ -977,8 +1112,8 @@ function LiveClassPage() {
                         }}
                       >
                         {m.kind === "text" && m.text}
-                        {m.kind === "voice" && <VoiceBubble length={m.length} mine={mine} />}
-                        {m.kind === "doc" && <DocBubble name={m.name} size={m.size} mine={mine} />}
+                        {m.kind === "voice" && <VoiceBubble length={m.length} mine={mine} path={m.path} />}
+                        {m.kind === "doc" && <div className="cursor-pointer" onClick={() => openShared(m.path)}><DocBubble name={m.name} size={m.size} mine={mine} /></div>}
                         {m.kind === "sketch" && <img src={m.src} alt="Sketch" className="w-[220px] rounded-xl bg-white" />}
                       </div>
                     </div>
@@ -1001,7 +1136,7 @@ function LiveClassPage() {
                   <div className="min-h-0 flex-1">
                     <DrawPad
                       onSend={(src) => {
-                        push({ kind: "sketch", src });
+                        void post({ kind: "sketch", body: src });
                         setSketchOpen(false);
                         setSheet("chat");
                       }}
@@ -1037,6 +1172,9 @@ function LiveClassPage() {
                     <span className="flex flex-1 items-center gap-2 text-[14px] font-semibold" style={{ color: FLAME }}>
                       <span className="lc-anim h-2 w-2 rounded-full" style={{ backgroundColor: FLAME, animation: "lc-pulse 1s infinite" }} />
                       Recording {mmss(recSecs)}
+                      <button onClick={() => stopRec(false)} aria-label="Cancel recording" className="ml-auto grid h-8 w-8 place-items-center rounded-full" style={{ color: INK_SOFT }}>
+                        <X className="h-4 w-4" />
+                      </button>
                     </span>
                   ) : (
                     <input

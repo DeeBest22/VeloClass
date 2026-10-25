@@ -75,10 +75,14 @@ const courses = [
   },
 ];
 
-const schedule = [
-  { time: "09:30", title: "Organic Chemistry II", meta: "Lab 2 · 90 min", now: true },
+const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const displayDays: Record<(typeof weekDays)[number], string> = { Sun: "Sunday", Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday" };
 
-];
+function formatTime(time: string) {
+  const [hours, minutes] = time.split(":").map(Number);
+  const date = new Date(); date.setHours(hours, minutes, 0, 0);
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
 
 const alerts = [
   {
@@ -213,6 +217,23 @@ function HomePage() {
     };
   });
   const visibleClasses = realClasses.filter((course) => !course.archived).slice(0, 3);
+  const now = new Date();
+  const today = weekDays[now.getDay()];
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const scheduledClasses = realClasses
+    .filter((course) => !course.archived && course.scheduleDays?.length && course.scheduleTime)
+    .flatMap((course) => (course.scheduleDays ?? []).map((day) => {
+      const dayIndex = weekDays.indexOf(day as (typeof weekDays)[number]);
+      const [hours, minutes] = (course.scheduleTime ?? "00:00").split(":").map(Number);
+      const classMinutes = hours * 60 + minutes;
+      let daysAway = (dayIndex - now.getDay() + 7) % 7;
+      if (daysAway === 0 && classMinutes < currentMinutes) daysAway = 7;
+      return { id: `${course.id}-${day}`, classId: course.id, role: course.myRole, day: day as (typeof weekDays)[number], daysAway, time: course.scheduleTime!, timeMinutes: classMinutes, title: course.name, meta: course.courseCode };
+    }));
+  const todaySchedule = scheduledClasses.filter((item) => item.day === today).sort((a, b) => a.timeMinutes - b.timeMinutes);
+  const upcomingSchedule = scheduledClasses.filter((item) => item.day !== today || item.timeMinutes >= currentMinutes).sort((a, b) => a.daysAway - b.daysAway || a.timeMinutes - b.timeMinutes);
+  const schedule = (todaySchedule.length ? todaySchedule : upcomingSchedule).slice(0, 4);
+  const showingUpcomingSchedule = todaySchedule.length === 0 && schedule.length > 0;
   const enrolledCount = realClasses.filter((course) => course.myRole === "student").length;
   const teachingCount = realClasses.filter((course) => course.myRole === "teacher").length;
   const showDummyCourses = !myClassesQuery.isPending && realClasses.length === 0;
@@ -400,46 +421,76 @@ function HomePage() {
           <h2 className="text-sm font-semibold" style={{ color: INK }}>
             Today&apos;s schedule
           </h2>
-          <div className="mt-4 space-y-2">
-            {schedule.length === 0 && (
-              <EmptyState title="Nothing scheduled today" meta="Your classes for today will appear here" />
-            )}
-            {schedule.map((s) => (
-              <div
-                key={s.title}
-                className="flex items-center gap-4 rounded-2xl px-4 py-3.5 transition-colors hover:bg-black/[0.02]"
-                style={{ backgroundColor: "white", border: "1px solid rgba(0,0,0,0.06)" }}
-              >
-                <p className="w-12 shrink-0 text-[13px] font-semibold tabular-nums" style={{ color: INK_SOFT }}>
-                  {s.time}
-                </p>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="truncate text-[13.5px] font-medium" style={{ color: INK }}>
-                      {s.title}
-                    </p>
-                    {s.now && (
+          {schedule.length === 0 ? (
+            <div className="mt-4">
+              <EmptyState title="No scheduled classes yet" meta="Set a class day and time to see it here" />
+            </div>
+          ) : (
+            <ol className="relative mt-5 space-y-1.5">
+              <span
+                aria-hidden="true"
+                className="absolute bottom-4 left-[5px] top-4 w-px"
+                style={{ backgroundColor: "rgba(0,0,0,0.1)" }}
+              />
+              {schedule.map((s, i) => {
+                const accent = courses[i % courses.length].accent;
+                const isNow =
+                  s.day === today && currentMinutes >= s.timeMinutes && currentMinutes < s.timeMinutes + 90;
+                return (
+                  <li key={s.id} className="relative pl-7">
+                    <span
+                      aria-hidden="true"
+                      className="absolute left-0 top-[1.4rem] h-[11px] w-[11px] rounded-full"
+                      style={{
+                        backgroundColor: isNow ? "#0D9B57" : CANVAS,
+                        border: isNow ? "none" : `2px solid ${accent}`,
+                      }}
+                    >
+                      {isNow && (
+                        <span
+                          className="absolute inset-0 animate-ping rounded-full"
+                          style={{ backgroundColor: "#0D9B57", opacity: 0.45 }}
+                        />
+                      )}
+                    </span>
+                    <Link
+                      to={s.role === "teacher" ? "/teacher" : "/class"}
+                      search={{ classId: s.classId }}
+                      className="group flex items-center gap-3 rounded-2xl px-3.5 py-3 transition-colors hover:bg-black/[0.035]"
+                      style={isNow ? { backgroundColor: "white", border: "1px solid rgba(0,0,0,0.06)" } : undefined}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p
+                          className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em]"
+                          style={{ color: isNow ? "#0D9B57" : accent }}
+                        >
+                          {isNow ? "Now" : formatTime(s.time)}
+                          {showingUpcomingSchedule && (
+                            <span className="font-medium normal-case tracking-normal" style={{ color: INK_SOFT }}>
+                              · {displayDays[s.day]}
+                            </span>
+                          )}
+                        </p>
+                        <p className="mt-1 truncate text-[14.5px] font-bold leading-snug" style={{ color: INK }}>
+                          {s.title}
+                        </p>
+                        <p className="mt-0.5 truncate text-[11.5px]" style={{ color: INK_SOFT }}>
+                          {isNow ? `${formatTime(s.time)} · ${s.meta}` : s.meta}
+                        </p>
+                      </div>
                       <span
-                        className="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-wider"
-                        style={{ backgroundColor: "#E7F8EF", color: "#0D9B57" }}
+                        className="grid h-7 w-7 shrink-0 place-items-center rounded-full transition-transform group-hover:translate-x-0.5"
+                        style={{ backgroundColor: "rgba(0,0,0,0.04)" }}
                       >
-                        <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: "#0D9B57" }} />
-                        Now
+                        <ChevronRight className="h-3.5 w-3.5" style={{ color: INK_SOFT }} />
                       </span>
-                    )}
-                  </div>
-                  <p className="truncate text-[11.5px]" style={{ color: INK_SOFT }}>
-                    {s.meta}
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0" style={{ color: INK_SOFT }} />
-              </div>
-            ))}
-          </div>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
         </section>
-
-     
-    
 
         {/* Recent activity */}
         <section className="mt-9">

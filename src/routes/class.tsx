@@ -18,6 +18,7 @@ import {
   Check,
   Pencil,
   RefreshCw,
+  Video,
   Archive,
   ArchiveRestore,
   Trash2,
@@ -294,6 +295,7 @@ function ClassHome() {
                   </>
                 ) : (
                   <>
+                    <MenuItem icon={Video} label="Join live class" onClick={() => void router.navigate({ to: "/live-class", search: { classId: overview.id } })} />
                     <MenuItem icon={Users} label="Members" onClick={() => router.navigate({ to: "/members", search: { classId: overview.id } })} />
                     <div className="mx-2 my-1.5 h-px bg-white/10" />
                     <MenuItem icon={LogOut} label="Leave class" danger onClick={() => setConfirm("leave")} />
@@ -464,7 +466,7 @@ function ClassHome() {
               })}
             </div>
           </div>
-        </div>
+        </div>x
       </div>
       {confirm && <div className="fixed inset-0 z-30 grid place-items-center bg-black/30 p-4"><div className="w-full max-w-sm rounded-3xl border border-black/10 bg-white p-5"><h2 className="text-base font-bold">{confirm === "delete" ? "Delete class?" : confirm === "leave" ? "Leave class?" : confirm === "regenerate" ? "Regenerate join code?" : overview.archived ? "Unarchive class?" : "Archive class?"}</h2><p className="mt-2 text-sm text-slate-500">{confirm === "regenerate" ? "The old code will stop working immediately." : confirm === "archive" ? "Nobody new can join while this class is archived." : "This action can affect access to this class."}</p><div className="mt-5 flex justify-end gap-2"><button disabled={busy} onClick={() => setConfirm(null)} className="rounded-full border border-black/10 px-4 py-2 text-sm">Cancel</button><button disabled={busy} onClick={() => void (async () => { setBusy(true); try { if (confirm === "regenerate") { await regenerateJoinCode(overview.id); toast.success("Join code regenerated"); } else if (confirm === "archive") { await setClassArchived(overview.id, !overview.archived); toast.success(overview.archived ? "Class unarchived" : "Class archived"); } else if (confirm === "delete") { await deleteClass(overview.id); router.navigate({ to: "/courses" }); } else { await leaveClass(overview.id); router.navigate({ to: "/courses" }); } setConfirm(null); } catch (error) { toast.error(error instanceof Error ? error.message : "Something went wrong"); } finally { setBusy(false); } })()} className="rounded-full bg-primary px-4 py-2 text-sm text-primary-foreground">{busy ? "Working…" : "Confirm"}</button></div></div></div>}
     </div>
