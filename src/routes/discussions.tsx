@@ -1,7 +1,17 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
-import { getLastOpenedClassId, useClassOverview } from "@/lib/classes";
+import { getLastOpenedClassId, useClassOverview, formatSchedule } from "@/lib/classes";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/client";
+import { getLiveMembers, liveFileUrl, uploadLiveFile, type LiveMessage } from "@/lib/live-class";
+import { PollsSheet, PollCard } from "@/components/PollsSheet";
+import { QuestionsSheet, QuestionCard } from "@/components/QuestionsSheet";
+import { listQuestions, toggleMeToo, type Question } from "@/lib/questions";
+import { QuizSheet, QuizCard } from "@/components/QuizSheet";
+import { listQuizzes, type QuizSummary } from "@/lib/quizzes";
+import { listPolls, votePoll, closePoll, type Poll } from "@/lib/polls";
+import { getDiscussionMessages, postDiscussionMessage } from "@/lib/discussions";
 import {
   ChevronLeft,
   ChevronRight,
@@ -64,7 +74,7 @@ export const Route = createFileRoute("/discussions")({
   validateSearch: (q: Record<string, unknown>): { classId?: string } => (typeof q["classId"] === "string" ? { classId: q["classId"] } : {}),
   head: () => ({
     meta: [
-      { title: "Class chat | Classroom" },
+      { title: "Discussions | Classroom" },
       { name: "description", content: "Chat with your class, read announcements, share sketches, voice notes and files." },
     ],
   }),
@@ -95,7 +105,7 @@ const CLASS_PIC = carPic;
 const STUDENT_PICS = [cremePic, wolverinePic, dogPic];
 
 /* ---------- types ---------- */
-type Person = { id: string; name: string; pic: string };
+type Person = { id: string; name: string; pic: string; lec?: boolean };
 type Member = Person & { role: "Lecturer" | "Student"; online: boolean };
 
 type Body =
@@ -103,45 +113,22 @@ type Body =
   | { kind: "voice"; length: string; url: string | null }
   | { kind: "doc"; name: string; size: string; url: string | null }
   | { kind: "sketch"; src: string }
+  | { kind: "poll"; poll: Poll }
+  | { kind: "question"; q: Question }
+  | { kind: "quiz"; quiz: QuizSummary }
   | { kind: "announce"; title: string; body: string; important: boolean; replies: number; unread: boolean };
-type Msg = { id: string; fromId: string; time: string } & Body;
+type Msg = { id: string; fromId: string; time: string; at?: number } & Body;
 type Announce = Extract<Msg, { kind: "announce" }>;
 
-/*
-  TODO: messages live in local state so every feature works right now.
-  Swap `msgs`, `add` and the file/voice/sketch handlers for your real class chat queries
-  and uploads (the voice, file and sketch bodies already carry what you need to store).
-*/
-const SEED: Msg[] = [
-  { id: "a1", fromId: "ada", time: "9:02 AM", kind: "announce", title: "Test 2 holds next Thursday", body: "Covers chapters 3 to 5. Bring your calculators and keep to time.", important: true, replies: 4, unread: true },
-  { id: "m1", fromId: "amaka", time: "10:14 AM", kind: "text", text: "Good morning everyone. Has anyone solved question 4 from the last tutorial?" },
-  { id: "m2", fromId: "tobi", time: "10:18 AM", kind: "text", text: "Yes, take moments about point B first, then the support reaction falls out quickly." },
-  { id: "m3", fromId: "zainab", time: "11:40 AM", kind: "text", text: "Can someone share the lecture notes from Tuesday?" },
-  { id: "m4", fromId: "ada", time: "11:46 AM", kind: "text", text: "Notes are uploaded. Please go through them before Thursday." },
-  { id: "m5", fromId: "ada", time: "11:47 AM", kind: "doc", name: "Statics Notes Week 4.pdf", size: "2.4 MB", url: null },
-];
-
-/*
-  TODO: class details are placeholders. Load the real description, schedule, venue, code and
-  member list for `classId` and replace DETAILS, EXTRA_MEMBERS and ONLINE below.
-*/
-const DETAILS = {
-  code: "MCE 303",
-  schedule: "Mon and Wed, 10:00 AM",
-  venue: "Engineering Lecture Theatre 2",
-  classCode: "FLU-3X9K",
-  about: "The home for this class. Ask questions, share notes and keep up with announcements from your lecturer.",
+// `url` on voice/doc bodies holds the storage path; it is resolved to a signed URL when opened.
+const toMsg = (r: LiveMessage, me?: string): Msg => {
+  const base = { id: r.id, at: Date.parse(r.created_at), fromId: r.sender_id === me ? "me" : r.sender_id, time: new Date(r.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) };
+  if (r.kind === "announcement") return { ...base, kind: "announce", title: r.title ?? "", body: r.body ?? "", important: r.important, replies: 0, unread: false };
+  if (r.kind === "file") return { ...base, kind: "doc", name: r.file_name ?? "File", size: fmtSize(r.file_size ?? 0), url: r.storage_path };
+  if (r.kind === "sketch") return { ...base, kind: "sketch", src: r.body ?? "" };
+  if (r.kind === "voice") return { ...base, kind: "voice", length: r.body ?? "0:00", url: r.storage_path };
+  return { ...base, kind: "text", text: r.body ?? "" };
 };
-const EXTRA_MEMBERS: { id: string; name: string }[] = [
-  { id: "chidi", name: "Chidi" },
-  { id: "ife", name: "Ife" },
-  { id: "bola", name: "Bola" },
-  { id: "emeka", name: "Emeka" },
-  { id: "halima", name: "Halima" },
-  { id: "kunle", name: "Kunle" },
-  { id: "sade", name: "Sade" },
-];
-const ONLINE = new Set(["ada", "me", "amaka", "tobi", "chidi", "halima"]);
 const VISIBLE_MEMBERS = 6;
 
 type Tab = "chat" | "announcements" | "files";
@@ -206,10 +193,12 @@ function VoiceBubble({ length, mine, url }: { length: string; mine: boolean; url
   async function toggle() {
     if (!url) return;
     if (!audio.current) {
-      const a = new Audio(url);
+      try {
+      const a = new Audio(await liveFileUrl(url));
       a.ontimeupdate = () => setPct(a.duration ? a.currentTime / a.duration : 0);
       a.onended = () => { setPlaying(false); setPct(0); };
       audio.current = a;
+      } catch { return; }
     }
     if (audio.current.paused) { await audio.current.play().catch(() => {}); setPlaying(true); } else { audio.current.pause(); setPlaying(false); }
   }
@@ -512,30 +501,61 @@ function ClassChatPage() {
   const isInstructor = overview?.myRole === "teacher";
   const className = overview?.name ?? "Class chat";
 
-  const people = useMemo<Record<string, Person>>(
-    () => ({
-      me: { id: "me", name: "You", pic: isInstructor ? lecturerPic : dogPic },
-      ada: { id: "ada", name: overview?.teacherName ?? "Dr. Ada Bello", pic: lecturerPic },
-      amaka: { id: "amaka", name: "Amaka", pic: cremePic },
-      tobi: { id: "tobi", name: "Tobi", pic: wolverinePic },
-      zainab: { id: "zainab", name: "Zainab", pic: dogPic },
-    }),
-    [isInstructor, overview?.teacherName],
-  );
+  const qc = useQueryClient();
+  const membersQ = useQuery({ queryKey: ["live-members", classId], enabled: !!classId, queryFn: () => getLiveMembers(classId!) });
+  const messagesQ = useQuery({ queryKey: ["discussion-messages", classId], enabled: !!classId, queryFn: () => getDiscussionMessages(classId!), refetchInterval: 10000 });
+  const [online, setOnline] = useState<string[]>([]);
+  const chan = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  useEffect(() => {
+    if (!classId || !user) return;
+    const ch = supabase.channel(`discussion:${classId}`, { config: { presence: { key: user.id } } });
+    ch.on("presence", { event: "sync" }, () => setOnline(Object.keys(ch.presenceState())))
+      .on("broadcast", { event: "changed" }, () => void qc.invalidateQueries({ queryKey: ["discussion-messages", classId] }))
+      .on("broadcast", { event: "polls" }, () => void qc.invalidateQueries({ queryKey: ["polls", classId] }))
+      .on("broadcast", { event: "quizzes" }, () => { void qc.invalidateQueries({ queryKey: ["quizzes", classId] }); void qc.invalidateQueries({ queryKey: ["quiz-results"] }); })
+      .on("broadcast", { event: "questions" }, () => { void qc.invalidateQueries({ queryKey: ["questions", classId] }); void qc.invalidateQueries({ queryKey: ["answers", classId] }); })
+      .subscribe((st: string) => { if (st === "SUBSCRIBED") void ch.track({ at: Date.now() }); });
+    chan.current = ch;
+    return () => { chan.current = null; void supabase.removeChannel(ch); };
+  }, [classId, user?.id, qc]);
+
+  const people = useMemo<Record<string, Person>>(() => {
+    const o: Record<string, Person> = { me: { id: "me", name: "You", pic: isInstructor ? lecturerPic : dogPic, lec: isInstructor } };
+    for (const m of membersQ.data ?? []) {
+      const me = m.id === user?.id;
+      o[me ? "me" : m.id] = { id: me ? "me" : m.id, name: me ? "You" : m.name, pic: m.avatar_url ?? (m.role === "teacher" ? lecturerPic : dogPic), lec: m.role === "teacher" };
+    }
+    return o;
+  }, [membersQ.data, user?.id, isInstructor]);
   const personOf = (id: string): Person => people[id] ?? { id, name: "Member", pic: cremePic };
 
-  const roster = useMemo<Member[]>(() => {
-    const base = ["ada", "me", "amaka", "tobi", "zainab"].map((id) => people[id]).filter((p): p is Person => !!p);
-    const extra: Person[] = EXTRA_MEMBERS.map((m, i) => ({ id: m.id, name: m.name, pic: STUDENT_PICS[i % STUDENT_PICS.length] ?? cremePic }));
-    return [...base, ...extra].map((p) => ({
-      ...p,
-      role: p.id === "ada" || (p.id === "me" && isInstructor) ? "Lecturer" : "Student",
-      online: ONLINE.has(p.id),
-    }));
-  }, [people, isInstructor]);
+  const roster = useMemo<Member[]>(
+    () => (membersQ.data ?? []).map((m) => { const me = m.id === user?.id; return { ...(people[me ? "me" : m.id] as Person), role: m.role === "teacher" ? "Lecturer" : "Student", online: me || online.includes(m.id) } as Member; }),
+    [membersQ.data, people, online, user?.id],
+  );
+  const DETAILS = { code: overview?.courseCode ?? "", schedule: formatSchedule(overview?.scheduleDays ?? null, overview?.scheduleTime ?? null) ?? "Not scheduled", classCode: overview?.joinCode ?? "", about: overview?.description || "The home for this class. Ask questions, share notes and keep up with announcements from your lecturer." };
   const memberPreview = roster.slice(0, 4).map((m) => m.name).join(", ");
 
-  const [msgs, setMsgs] = useState<Msg[]>(SEED);
+  const pollsQ = useQuery({ queryKey: ["polls", classId], enabled: !!classId, queryFn: () => listPolls(classId!), refetchInterval: 10000 });
+  const questionsQ = useQuery({ queryKey: ["questions", classId], enabled: !!classId, queryFn: () => listQuestions(classId!), refetchInterval: 10000 });
+  const quizzesQ = useQuery({ queryKey: ["quizzes", classId], enabled: !!classId, queryFn: () => listQuizzes(classId!), refetchInterval: 10000 });
+  const who = (id: string | null) => (id ? personOf(id === user?.id ? "me" : id) : null);
+  const msgs = useMemo(() => {
+    const t = membersQ.data?.find((m) => m.role === "teacher")?.id;
+    const tid = t === user?.id ? "me" : (t ?? "poll");
+    const polls = (pollsQ.data ?? []).map((p): Msg => ({ id: `poll-${p.id}`, fromId: tid, at: Date.parse(p.created_at), time: new Date(p.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), kind: "poll", poll: p }));
+    const qms = (questionsQ.data ?? []).map((q): Msg => ({ id: `q-${q.id}`, fromId: q.asker_id ? (q.asker_id === user?.id ? "me" : q.asker_id) : "anon", at: Date.parse(q.created_at), time: new Date(q.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), kind: "question", q }));
+    const qzs = (quizzesQ.data ?? []).map((quiz): Msg => ({ id: `quiz-${quiz.id}`, fromId: tid, at: Date.parse(quiz.created_at), time: new Date(quiz.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), kind: "quiz", quiz }));
+    return [...(messagesQ.data ?? []).map((r) => toMsg(r, user?.id)), ...polls, ...qms, ...qzs].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  }, [messagesQ.data, pollsQ.data, questionsQ.data, quizzesQ.data, membersQ.data, user?.id]);
+  const qAct = (pr: Promise<unknown>) => {
+    const sync = () => { void qc.invalidateQueries({ queryKey: ["questions", classId] }); void chan.current?.send({ type: "broadcast", event: "questions", payload: {} }); };
+    pr.then(sync).catch((e: Error) => { setToast(e.message); sync(); });
+  };
+  const pollAct = (pr: Promise<unknown>, ok: string) => {
+    const sync = () => { void qc.invalidateQueries({ queryKey: ["polls", classId] }); void chan.current?.send({ type: "broadcast", event: "polls", payload: {} }); };
+    pr.then(() => { setToast(ok); sync(); }).catch((e: Error) => { setToast(e.message); sync(); });
+  };
   const [tab, setTab] = useState<Tab>("chat");
   const [compose, setCompose] = useState<"message" | "announcement">("message");
   const [draft, setDraft] = useState("");
@@ -547,6 +567,11 @@ function ClassChatPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [annSeen, setAnnSeen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [pollsOpen, setPollsOpen] = useState(false);
+  const [qOpen, setQOpen] = useState(false);
+  const [qThread, setQThread] = useState<string | null>(null);
+  const [quizOpen, setQuizOpen] = useState(false);
+  const [quizId, setQuizId] = useState<string | null>(null);
 
   const [infoOpen, setInfoOpen] = useState(false);
   const [infoKey, setInfoKey] = useState(0);
@@ -640,11 +665,22 @@ function ClassChatPage() {
     e.g. poll -> navigate({ to: "/polls", search: { classId } })
   */
   function openTool(id: ToolId) {
+    if (id === "poll") return setPollsOpen(true);
+    if (id === "questions") return setQOpen(true);
+    if (id === "quiz") return setQuizOpen(true);
     const label = TOOLS.find((t) => t.id === id)?.label ?? "This tool";
     setToast(`${label} is coming soon`);
   }
 
-  const add = (body: Body) => setMsgs((p) => [...p, { id: uid(), fromId: "me", time: nowLabel(), ...body }]);
+  const post = async (v: Parameters<typeof postDiscussionMessage>[1]) => {
+    if (!classId) { setToast("Open a class first"); return false; }
+    try {
+      await postDiscussionMessage(classId, v);
+      void qc.invalidateQueries({ queryKey: ["discussion-messages", classId] });
+      void chan.current?.send({ type: "broadcast", event: "changed", payload: {} });
+      return true;
+    } catch (e) { setToast((e as Error).message); return false; }
+  };
 
   function send() {
     const text = draft.trim();
@@ -654,14 +690,14 @@ function ClassChatPage() {
         setToast("Add a title first");
         return;
       }
-      add({ kind: "announce", title: title.trim(), body: text, important, replies: 0, unread: false });
+      void post({ kind: "announcement", title: title.trim(), body: text, important });
       setTitle("");
       setImportant(false);
       setCompose("message");
       setTab("announcements");
       setToast("Announcement posted");
     } else {
-      add({ kind: "text", text });
+      void post({ kind: "text", body: text });
     }
     setDraft("");
   }
@@ -688,9 +724,11 @@ function ClassChatPage() {
     if (sendIt && !keep) setToast("Too short, hold a little longer");
     r.mr.onstop = () => {
       r.stream.getTracks().forEach((t) => t.stop());
-      if (!keep) return;
+      if (!keep || !classId) return;
       const type = (r.mr.mimeType || "audio/webm").split(";")[0] ?? "audio/webm";
-      add({ kind: "voice", length: mmss(secs), url: URL.createObjectURL(new Blob(r.chunks, { type })) });
+      uploadLiveFile(classId, new Blob(r.chunks, { type }), `voice.${type.includes("mp4") ? "m4a" : "webm"}`, type)
+        .then((path) => post({ kind: "voice", body: mmss(secs), storage_path: path, mime_type: type }))
+        .catch((e) => setToast(e.message));
     };
     r.mr.stop();
     setRecording(false);
@@ -703,17 +741,15 @@ function ClassChatPage() {
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
-    if (!f) return;
-    add({ kind: "doc", name: f.name, size: fmtSize(f.size), url: URL.createObjectURL(f) });
-    setToast("Document shared");
+    if (!f || !classId) return;
+    setToast("Sending file…");
+    void uploadLiveFile(classId, f, f.name).then((path) => post({ kind: "file", storage_path: path, file_name: f.name, file_size: f.size, mime_type: f.type }))
+      .then((ok) => { if (ok) setToast("Document shared"); }).catch((err) => setToast(err.message));
     e.target.value = "";
     if (tab !== "files") setTab("chat");
   }
 
-  const openShared = (url: string | null) => {
-    if (url) window.open(url, "_blank", "noopener");
-    else setToast("This demo file has no download yet");
-  };
+  const openShared = (path: string | null) => { if (path) liveFileUrl(path).then((u) => window.open(u, "_blank", "noopener")).catch((e) => setToast(e.message)); };
 
   const files = msgs
     .flatMap((m) => (m.kind === "doc" ? [{ id: m.id, name: m.name, by: m.fromId === "me" ? "You" : personOf(m.fromId).name, size: m.size, tag: extOf(m.name), url: m.url }] : []))
@@ -858,7 +894,7 @@ function ClassChatPage() {
             <div className="lc-scroll flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-4 pt-3">
               {shown.length === 0 && (
                 <p className="m-auto text-[13px]" style={{ color: INK_SOFT }}>
-                  No announcements yet.
+                  {tab === "chat" ? "No messages yet. Start the discussion." : "No announcements yet."}
                 </p>
               )}
               {tab === "chat" && shown.length > 0 && (
@@ -876,9 +912,31 @@ function ClassChatPage() {
                     </div>
                   );
                 }
+                if (m.kind === "poll") {
+                  return (
+                    <div key={m.id} className={`${i === 0 ? "" : "mt-4"} ${fresh.current.has(m.id) ? "lc-msg" : ""}`}>
+                      <PollCard poll={m.poll} teacher={isInstructor} meta={{ name: mine ? "You" : p.name, pic: p.pic, time: m.time }} eligible={roster.filter((r) => r.role === "Student").length} onVote={(ids) => pollAct(votePoll(m.poll.id, ids), "Vote recorded")} onClose={() => pollAct(closePoll(m.poll.id), "Poll closed")} />
+                    </div>
+                  );
+                }
+                if (m.kind === "quiz") {
+                  return (
+                    <div key={m.id} className={`${i === 0 ? "" : "mt-4"} ${fresh.current.has(m.id) ? "lc-msg" : ""}`}>
+                      <QuizCard quiz={m.quiz} who={p} time={m.time} teacher={isInstructor} onOpen={() => { setQuizId(m.quiz.id); setQuizOpen(true); }} />
+                    </div>
+                  );
+                }
+                if (m.kind === "question") {
+                  const qq = m.q;
+                  return (
+                    <div key={m.id} className={`${i === 0 ? "" : "mt-4"} ${fresh.current.has(m.id) ? "lc-msg" : ""}`}>
+                      <QuestionCard q={qq} who={who(qq.asker_id)} viewerIsTeacher={isInstructor} onOpen={() => { setQThread(qq.id); setQOpen(true); }} onMeToo={() => qAct(toggleMeToo(qq.id))} />
+                    </div>
+                  );
+                }
                 const prev = shown[i - 1];
-                const first = !prev || prev.fromId !== m.fromId;
-                const lecturer = m.fromId === "ada";
+                const first = !prev || prev.fromId !== m.fromId || prev.kind === "poll" || prev.kind === "question" || prev.kind === "quiz";
+                const lecturer = !!p.lec;
                 const gap = i === 0 ? "" : first ? "mt-4" : "mt-1";
                 return (
                   <div key={m.id} className={`flex min-w-0 max-w-[86%] items-start gap-2 ${mine ? "flex-row-reverse self-end" : "self-start"} ${gap} ${fresh.current.has(m.id) ? "lc-msg" : ""}`}>
@@ -941,7 +999,7 @@ function ClassChatPage() {
                   <div className="min-h-0 flex-1">
                     <DrawPad
                       onSend={(src) => {
-                        add({ kind: "sketch", src });
+                        void post({ kind: "sketch", body: src });
                         setSketchOpen(false);
                         setTab("chat");
                       }}
@@ -1155,7 +1213,6 @@ function ClassChatPage() {
               </p>
               <div className="mt-3" style={{ borderTop: `1px solid ${LINE}` }}>
                 <DetailRow Icon={Calendar} label="Schedule" value={DETAILS.schedule} />
-                <DetailRow Icon={MapPin} label="Venue" value={DETAILS.venue} top />
                 <DetailRow
                   Icon={Hash}
                   label="Class code"
@@ -1304,9 +1361,15 @@ function ClassChatPage() {
         </div>
       </div>
 
+      <PollsSheet classId={classId} isInstructor={isInstructor} open={pollsOpen} onClose={() => setPollsOpen(false)} onToast={setToast} onChanged={() => void chan.current?.send({ type: "broadcast", event: "polls", payload: {} })} />
+
+      <QuestionsSheet classId={classId} userId={user?.id} isInstructor={isInstructor} open={qOpen} onClose={() => setQOpen(false)} onToast={setToast} thread={qThread} setThread={setQThread} who={who} onChanged={() => void chan.current?.send({ type: "broadcast", event: "questions", payload: {} })} />
+
+      <QuizSheet classId={classId} userId={user?.id} isInstructor={isInstructor} open={quizOpen} onClose={() => setQuizOpen(false)} onToast={setToast} quizId={quizId} setQuizId={setQuizId} who={who} students={(membersQ.data ?? []).filter((m) => m.role === "student").map((m) => ({ id: m.id, name: m.name, pic: people[m.id === user?.id ? "me" : m.id]?.pic ?? cremePic }))} onChanged={() => void chan.current?.send({ type: "broadcast", event: "quizzes", payload: {} })} />
+
       {/* Toast */}
       <div
-        className="pointer-events-none absolute left-1/2 top-20 z-40 -translate-x-1/2 whitespace-nowrap rounded-full px-4 py-2 text-[12px] font-semibold text-white transition-all duration-300"
+        className="pointer-events-none absolute left-1/2 top-20 z-[70] -translate-x-1/2 whitespace-nowrap rounded-full px-4 py-2 text-[12px] font-semibold text-white transition-all duration-300"
         style={{ backgroundColor: INK, opacity: toast ? 1 : 0, transform: `translate(-50%, ${toast ? 0 : -12}px)` }}
       >
         {toast}
