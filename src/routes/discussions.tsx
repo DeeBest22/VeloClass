@@ -10,6 +10,7 @@ import { QuestionsSheet, QuestionCard } from "@/components/QuestionsSheet";
 import { listQuestions, toggleMeToo, type Question } from "@/lib/questions";
 import { QuizSheet, QuizCard } from "@/components/QuizSheet";
 import { listQuizzes, type QuizSummary } from "@/lib/quizzes";
+import Whiteboard from "./whiteboard/Whiteboard";
 import { listPolls, votePoll, closePoll, type Poll } from "@/lib/polls";
 import { getDiscussionMessages, postDiscussionMessage } from "@/lib/discussions";
 import {
@@ -571,6 +572,7 @@ function ClassChatPage() {
   const [qOpen, setQOpen] = useState(false);
   const [qThread, setQThread] = useState<string | null>(null);
   const [quizOpen, setQuizOpen] = useState(false);
+  const [wbOpen, setWbOpen] = useState(false);
   const [quizId, setQuizId] = useState<string | null>(null);
 
   const [infoOpen, setInfoOpen] = useState(false);
@@ -668,6 +670,7 @@ function ClassChatPage() {
     if (id === "poll") return setPollsOpen(true);
     if (id === "questions") return setQOpen(true);
     if (id === "quiz") return setQuizOpen(true);
+    if (id === "whiteboard") return classId ? setWbOpen(true) : setToast("Open a class first");
     const label = TOOLS.find((t) => t.id === id)?.label ?? "This tool";
     setToast(`${label} is coming soon`);
   }
@@ -1366,6 +1369,12 @@ function ClassChatPage() {
       <QuestionsSheet classId={classId} userId={user?.id} isInstructor={isInstructor} open={qOpen} onClose={() => setQOpen(false)} onToast={setToast} thread={qThread} setThread={setQThread} who={who} onChanged={() => void chan.current?.send({ type: "broadcast", event: "questions", payload: {} })} />
 
       <QuizSheet classId={classId} userId={user?.id} isInstructor={isInstructor} open={quizOpen} onClose={() => setQuizOpen(false)} onToast={setToast} quizId={quizId} setQuizId={setQuizId} who={who} students={(membersQ.data ?? []).filter((m) => m.role === "student").map((m) => ({ id: m.id, name: m.name, pic: people[m.id === user?.id ? "me" : m.id]?.pic ?? cremePic }))} onChanged={() => void chan.current?.send({ type: "broadcast", event: "quizzes", payload: {} })} />
+
+      {wbOpen && classId && (
+        <div className="fixed inset-0 z-[80]">
+          <Whiteboard classId={classId} onClose={() => setWbOpen(false)} />
+        </div>
+      )}
 
       {/* Toast */}
       <div
