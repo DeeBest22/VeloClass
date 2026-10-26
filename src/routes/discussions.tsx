@@ -498,6 +498,7 @@ function ClassChatPage() {
   const { classId: sid } = Route.useSearch();
   const { user } = useAuth();
   const classId = sid ?? getLastOpenedClassId(user?.id) ?? undefined;
+  const navigate = Route.useNavigate();
   const overview = useClassOverview(classId).data;
   const isInstructor = overview?.myRole === "teacher";
   const className = overview?.name ?? "Class chat";
@@ -670,6 +671,7 @@ function ClassChatPage() {
     if (id === "poll") return setPollsOpen(true);
     if (id === "questions") return setQOpen(true);
     if (id === "quiz") return setQuizOpen(true);
+    if (id === "notes") { navigate({ to: "/notes", search: { classId } }); return; }
     if (id === "whiteboard") return classId ? setWbOpen(true) : setToast("Open a class first");
     const label = TOOLS.find((t) => t.id === id)?.label ?? "This tool";
     setToast(`${label} is coming soon`);
