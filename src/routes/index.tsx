@@ -11,7 +11,8 @@ import {
   Calculator,
   MessageSquare,
   FolderOpen,
-  GraduationCap,
+  NotebookPen,
+  PenTool,
   Users,
   FileText,
   ClipboardCheck,
@@ -103,7 +104,8 @@ const tools = [
 
   { icon: MessageSquare, label: "Messages", bg: "#DDF3E4", accent: "#0D9B57", to: "/chat" },
   { icon: FolderOpen, label: "Resources", bg: "#FFE9D6", accent: "#C2680E", to: "/files" },
-  { icon: GraduationCap, label: "Grades", bg: "#FDE2E2", accent: "#D3402E" },
+  { icon: NotebookPen, label: "Notes", bg: "#EEEAFD", accent: "#5B3FE0", to: "/notes" },
+  { icon: PenTool, label: "Whiteboard", bg: "#E3ECFF", accent: "#2F6BFF", to: "/whiteboard" },
 ];
 
 const mentors = [
@@ -397,7 +399,7 @@ function HomePage() {
             {tools.map((t) => (
               <Link
                 to={t.to ?? "/"}
-                search={t.to === "/files" && activeClassId ? { classId: activeClassId } : undefined}
+                search={(t.to === "/files" || t.to === "/notes" || t.to === "/whiteboard") && activeClassId ? { classId: activeClassId } : undefined}
                 key={t.label}
                 className="flex flex-col items-center gap-2 rounded-2xl py-3.5 transition-transform hover:-translate-y-0.5"
                 style={{ backgroundColor: "white", border: "1px solid rgba(0,0,0,0.06)" }}
