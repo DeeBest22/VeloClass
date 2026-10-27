@@ -11,6 +11,7 @@ import { listQuestions, toggleMeToo, type Question } from "@/lib/questions";
 import { QuizSheet, QuizCard } from "@/components/QuizSheet";
 import { listQuizzes, type QuizSummary } from "@/lib/quizzes";
 import Whiteboard from "./whiteboard/Whiteboard";
+import Workspaces from "@/components/Workspaces";
 import { listPolls, votePoll, closePoll, type Poll } from "@/lib/polls";
 import { getDiscussionMessages, postDiscussionMessage } from "@/lib/discussions";
 import {
@@ -574,6 +575,7 @@ function ClassChatPage() {
   const [qThread, setQThread] = useState<string | null>(null);
   const [quizOpen, setQuizOpen] = useState(false);
   const [wbOpen, setWbOpen] = useState(false);
+  const [wsOpen, setWsOpen] = useState(false);
   const [quizId, setQuizId] = useState<string | null>(null);
 
   const [infoOpen, setInfoOpen] = useState(false);
@@ -672,6 +674,7 @@ function ClassChatPage() {
     if (id === "questions") return setQOpen(true);
     if (id === "quiz") return setQuizOpen(true);
     if (id === "notes") { navigate({ to: "/notes", search: { classId } }); return; }
+    if (id === "workspaces") return classId ? setWsOpen(true) : setToast("Open a class first");
     if (id === "whiteboard") return classId ? setWbOpen(true) : setToast("Open a class first");
     const label = TOOLS.find((t) => t.id === id)?.label ?? "This tool";
     setToast(`${label} is coming soon`);
@@ -1377,6 +1380,8 @@ function ClassChatPage() {
           <Whiteboard classId={classId} onClose={() => setWbOpen(false)} />
         </div>
       )}
+
+      {wsOpen && classId && <Workspaces classId={classId} onClose={() => setWsOpen(false)} />}
 
       {/* Toast */}
       <div
